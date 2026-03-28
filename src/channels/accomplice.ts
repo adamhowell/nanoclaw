@@ -133,7 +133,10 @@ class AccompliceChannel implements Channel {
   }
 
   private handleMessage(msg: Record<string, unknown>): void {
-    logger.info({ msg }, 'Accomplice: handleMessage payload');
+    logger.info(
+      { msgKeys: Object.keys(msg), msgJson: JSON.stringify(msg) },
+      'Accomplice: handleMessage payload',
+    );
     switch (msg.type) {
       case 'user_message': {
         const jid = msg.conversation_jid as string;
