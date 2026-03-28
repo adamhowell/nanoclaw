@@ -8,6 +8,7 @@ import { isValidTimezone } from './timezone.js';
 const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
+  'IMESSAGE_CONTACT',
   'ONECLI_URL',
   'TZ',
 ]);
