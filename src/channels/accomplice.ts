@@ -24,8 +24,7 @@ const JID_PREFIX = 'accomplice:';
 const RECONNECT_DELAY = 5000;
 
 const envVars = readEnvFile(['ACCOMPLICE_URL', 'ACCOMPLICE_TOKEN']);
-const ACCOMPLICE_URL =
-  process.env.ACCOMPLICE_URL || envVars.ACCOMPLICE_URL;
+const ACCOMPLICE_URL = process.env.ACCOMPLICE_URL || envVars.ACCOMPLICE_URL;
 const ACCOMPLICE_TOKEN =
   process.env.ACCOMPLICE_TOKEN || envVars.ACCOMPLICE_TOKEN;
 
@@ -117,12 +116,18 @@ class AccompliceChannel implements Channel {
     }
 
     if (frame.type === 'reject_subscription') {
-      logger.error('Accomplice: subscription rejected — check ACCOMPLICE_TOKEN');
+      logger.error(
+        'Accomplice: subscription rejected — check ACCOMPLICE_TOKEN',
+      );
       return;
     }
 
     // Data message from Accomplice
-    if (frame.message && frame.identifier === this.identifier) {
+    if (frame.message) {
+      logger.info(
+        { identifier: frame.identifier, expectedIdentifier: this.identifier },
+        'Accomplice: received data frame',
+      );
       this.handleMessage(frame.message);
     }
   }
