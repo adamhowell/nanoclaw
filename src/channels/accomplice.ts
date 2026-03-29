@@ -133,15 +133,22 @@ class AccompliceChannel implements Channel {
   }
 
   private handleMessage(msg: Record<string, unknown>): void {
-    logger.info(
-      { msgKeys: Object.keys(msg), msgJson: JSON.stringify(msg) },
-      'Accomplice: handleMessage payload',
-    );
     switch (msg.type) {
       case 'user_message': {
         const jid = msg.conversation_jid as string;
         const messageId = msg.message_id as number;
-        const content = msg.content as string;
+        let content = msg.content as string;
+
+        // Append file URLs to message content so the agent can see them
+        const files = msg.files as
+          | Array<{ filename: string; content_type: string; url: string }>
+          | undefined;
+        if (files && files.length > 0) {
+          const fileList = files
+            .map((f) => `[Attached: ${f.filename} (${f.content_type}) — ${f.url}]`)
+            .join('\n');
+          content = content ? `${content}\n\n${fileList}` : fileList;
+        }
 
         // Track pending response so we can route sendMessage back
         this.pendingResponses.set(jid, messageId);
