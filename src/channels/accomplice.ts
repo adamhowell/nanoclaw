@@ -89,10 +89,6 @@ class AccompliceChannel implements Channel {
         `Accomplice: WebSocket closed, reconnecting in ${RECONNECT_DELAY / 1000}s`,
       );
       this.scheduleReconnect();
-      if (wasConnected) {
-        // Clear pending responses on disconnect
-        this.pendingResponses.clear();
-      }
     });
 
     this.ws.on('error', (err: Error) => {
