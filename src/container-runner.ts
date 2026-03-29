@@ -252,8 +252,7 @@ async function buildContainerArgs(
     'MS_GRAPH_TENANT_ID',
     'MS_GRAPH_CLIENT_SECRET',
   ]);
-  const msClientId =
-    process.env.MS_GRAPH_CLIENT_ID || msEnv.MS_GRAPH_CLIENT_ID;
+  const msClientId = process.env.MS_GRAPH_CLIENT_ID || msEnv.MS_GRAPH_CLIENT_ID;
   if (msClientId) {
     args.push('-e', `MS_GRAPH_CLIENT_ID=${msClientId}`);
     args.push(
