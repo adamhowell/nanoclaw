@@ -24,6 +24,7 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
+import { readEnvFile } from './env.js';
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
@@ -232,6 +233,18 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Pass through HWM API credentials if configured
+  const hwmEnv = readEnvFile(['HWM_API_TOKEN', 'HWM_API_URL']);
+  const hwmToken = process.env.HWM_API_TOKEN || hwmEnv.HWM_API_TOKEN;
+  const hwmUrl =
+    process.env.HWM_API_URL ||
+    hwmEnv.HWM_API_URL ||
+    'https://app.hardworkmontage.com/api/v1';
+  if (hwmToken) {
+    args.push('-e', `HWM_API_TOKEN=${hwmToken}`);
+    args.push('-e', `HWM_API_URL=${hwmUrl}`);
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
