@@ -246,6 +246,14 @@ async function buildContainerArgs(
     args.push('-e', `HWM_API_URL=${hwmUrl}`);
   }
 
+  // Pass through GitHub token if configured
+  const ghEnv = readEnvFile(['GH_TOKEN']);
+  const ghToken = process.env.GH_TOKEN || ghEnv.GH_TOKEN;
+  if (ghToken) {
+    args.push('-e', `GH_TOKEN=${ghToken}`);
+    args.push('-e', `GITHUB_TOKEN=${ghToken}`);
+  }
+
   // Pass through MS Graph credentials for dayjob integration
   const msEnv = readEnvFile([
     'MS_GRAPH_CLIENT_ID',
