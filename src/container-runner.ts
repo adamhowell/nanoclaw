@@ -246,6 +246,26 @@ async function buildContainerArgs(
     args.push('-e', `HWM_API_URL=${hwmUrl}`);
   }
 
+  // Pass through MS Graph credentials for dayjob integration
+  const msEnv = readEnvFile([
+    'MS_GRAPH_CLIENT_ID',
+    'MS_GRAPH_TENANT_ID',
+    'MS_GRAPH_CLIENT_SECRET',
+  ]);
+  const msClientId =
+    process.env.MS_GRAPH_CLIENT_ID || msEnv.MS_GRAPH_CLIENT_ID;
+  if (msClientId) {
+    args.push('-e', `MS_GRAPH_CLIENT_ID=${msClientId}`);
+    args.push(
+      '-e',
+      `MS_GRAPH_TENANT_ID=${process.env.MS_GRAPH_TENANT_ID || msEnv.MS_GRAPH_TENANT_ID}`,
+    );
+    args.push(
+      '-e',
+      `MS_GRAPH_CLIENT_SECRET=${process.env.MS_GRAPH_CLIENT_SECRET || msEnv.MS_GRAPH_CLIENT_SECRET}`,
+    );
+  }
+
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
   const onecliApplied = await onecli.applyContainerConfig(args, {
