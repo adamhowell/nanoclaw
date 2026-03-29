@@ -145,7 +145,9 @@ class AccompliceChannel implements Channel {
           | undefined;
         if (files && files.length > 0) {
           const fileList = files
-            .map((f) => `[Attached: ${f.filename} (${f.content_type}) — ${f.url}]`)
+            .map(
+              (f) => `[Attached: ${f.filename} (${f.content_type}) — ${f.url}]`,
+            )
             .join('\n');
           content = content ? `${content}\n\n${fileList}` : fileList;
         }
