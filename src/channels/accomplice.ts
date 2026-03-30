@@ -198,18 +198,17 @@ class AccompliceChannel implements Channel {
     }
 
     const messageId = this.pendingResponses.get(jid);
-    if (!messageId) {
-      logger.warn({ jid }, 'Accomplice: no pending response for JID');
-      return;
-    }
 
     this.sendAction('message_complete', {
-      message_id: messageId,
+      message_id: messageId || null,
+      conversation_jid: jid,
       final_content: text,
     });
 
-    // Clear pending after sending final response
-    this.pendingResponses.delete(jid);
+    // Clear pending — next response will use conversation_jid fallback
+    if (messageId) {
+      this.pendingResponses.delete(jid);
+    }
   }
 
   isConnected(): boolean {
