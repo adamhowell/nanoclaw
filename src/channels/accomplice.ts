@@ -48,7 +48,7 @@ class AccompliceChannel implements Channel {
     this.onMessage = opts.onMessage;
     this.onChatMetadata = opts.onChatMetadata;
     this.registeredGroups = opts.registeredGroups;
-    this.identifier = JSON.stringify({ channel: 'NanoclawRelayChannel' });
+    this.identifier = JSON.stringify({ channel: 'AgentRelayChannel' });
   }
 
   async connect(): Promise<void> {
@@ -56,7 +56,7 @@ class AccompliceChannel implements Channel {
   }
 
   private doConnect(): void {
-    const url = `${ACCOMPLICE_URL}?nanoclaw_token=${ACCOMPLICE_TOKEN}`;
+    const url = `${ACCOMPLICE_URL}?agent_token=${ACCOMPLICE_TOKEN}`;
     logger.info({ url: ACCOMPLICE_URL }, 'Accomplice: connecting');
 
     this.ws = new WebSocket(url);
