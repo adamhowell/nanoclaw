@@ -259,6 +259,7 @@ async function buildContainerArgs(
     'MS_GRAPH_CLIENT_ID',
     'MS_GRAPH_TENANT_ID',
     'MS_GRAPH_CLIENT_SECRET',
+    'MS_GRAPH_USER',
   ]);
   const msClientId = process.env.MS_GRAPH_CLIENT_ID || msEnv.MS_GRAPH_CLIENT_ID;
   if (msClientId) {
@@ -271,6 +272,10 @@ async function buildContainerArgs(
       '-e',
       `MS_GRAPH_CLIENT_SECRET=${process.env.MS_GRAPH_CLIENT_SECRET || msEnv.MS_GRAPH_CLIENT_SECRET}`,
     );
+    const msUser = process.env.MS_GRAPH_USER || msEnv.MS_GRAPH_USER;
+    if (msUser) {
+      args.push('-e', `MS_GRAPH_USER=${msUser}`);
+    }
   }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
