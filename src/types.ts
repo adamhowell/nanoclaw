@@ -91,6 +91,10 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: start a brand-new conversation on the platform and post an
+  // opening assistant message into it. Implemented by channels whose platform
+  // supports agent-initiated conversations (currently: accomplice / hwm_app).
+  startConversation?(title: string, content: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

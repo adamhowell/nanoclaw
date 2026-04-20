@@ -696,6 +696,15 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
+    startConversation: async (title, content) => {
+      const channel = channels.find((ch) => ch.startConversation);
+      if (!channel) {
+        throw new Error(
+          'No channel supports starting conversations (Accomplice not connected)',
+        );
+      }
+      await channel.startConversation!(title, content);
+    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

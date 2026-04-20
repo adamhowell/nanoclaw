@@ -337,6 +337,44 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+server.tool(
+  'new_conversation',
+  `Start a brand-new chat/conversation in the user's UI (e.g., for an unprompted briefing, alert, or summary) and post your first message into it in a single step. Main group only.
+
+The 'title' is shown in the conversation sidebar. The 'content' is posted as your opening assistant message. The new conversation becomes available for follow-up messages and scheduled tasks once the platform confirms creation.`,
+  {
+    title: z.string().describe('Short title for the new conversation (shown in the sidebar)'),
+    content: z.string().describe('The opening assistant message to post into the new conversation'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can start new conversations.' }],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'new_conversation',
+      title: args.title,
+      content: args.content,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Requested new conversation "${args.title}". The opening message will be posted once the platform confirms creation.`,
+        },
+      ],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

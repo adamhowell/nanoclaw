@@ -31,6 +31,9 @@ const ACCOMPLICE_TOKEN =
 /** Maps conversation JID -> pending assistant message ID on the Accomplice side */
 type PendingResponses = Map<string, number>;
 
+/** Opening-message content waiting for a conversation_started confirmation */
+type PendingNewConversation = { title: string; content: string };
+
 class AccompliceChannel implements Channel {
   name = 'accomplice';
 
@@ -39,6 +42,7 @@ class AccompliceChannel implements Channel {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private identifier: string;
   private pendingResponses: PendingResponses = new Map();
+  private pendingNewConversations: PendingNewConversation[] = [];
 
   private onMessage: OnInboundMessage;
   private onChatMetadata: OnChatMetadata;
@@ -186,9 +190,67 @@ class AccompliceChannel implements Channel {
         break;
       }
 
+      case 'conversation_started': {
+        // Response to an agent-initiated start_conversation action. Post the
+        // queued opening message into the newly-created conversation.
+        const jid = msg.conversation_jid as string;
+        const title = (msg.title as string) || 'Accomplice';
+        if (!jid) {
+          logger.warn({ msg }, 'Accomplice: conversation_started missing jid');
+          break;
+        }
+
+        this.onChatMetadata(
+          jid,
+          new Date().toISOString(),
+          title,
+          'accomplice',
+          false,
+        );
+
+        const pending =
+          this.pendingNewConversations.find((p) => p.title === title) ||
+          this.pendingNewConversations[0];
+        if (!pending) {
+          logger.warn(
+            { jid, title },
+            'Accomplice: conversation_started with no pending opener',
+          );
+          break;
+        }
+        this.pendingNewConversations = this.pendingNewConversations.filter(
+          (p) => p !== pending,
+        );
+
+        this.sendAction('message_complete', {
+          message_id: null,
+          conversation_jid: jid,
+          final_content: pending.content,
+        });
+        logger.info(
+          { jid, title },
+          'Accomplice: posted opening message into new conversation',
+        );
+        break;
+      }
+
       default:
         logger.debug({ type: msg.type }, 'Accomplice: unknown message type');
     }
+  }
+
+  async startConversation(title: string, content: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      logger.warn(
+        { title },
+        'Accomplice: cannot start conversation — not connected',
+      );
+      return;
+    }
+
+    this.pendingNewConversations.push({ title, content });
+    this.sendAction('start_conversation', { title });
+    logger.info({ title }, 'Accomplice: requested new conversation');
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {

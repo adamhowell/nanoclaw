@@ -52,6 +52,7 @@ The NanoClaw MCP server exposes these tools (via `mcp__nanoclaw__*` prefix):
 - `cancel_task` — cancel and delete a task
 - `update_task` — update an existing task
 - `register_group` — register a new chat/group (main only)
+- `new_conversation` — start a brand-new conversation in the user's UI with an opening assistant message (main only; platforms that support agent-initiated conversations, e.g. Accomplice)
 
 ### 4. Container skills (Bash tools)
 
@@ -84,7 +85,7 @@ Present the report as a clean, readable message. Example:
 • Core: Bash, Read, Write, Edit, Glob, Grep
 • Web: WebSearch, WebFetch
 • Orchestration: Task, TeamCreate, SendMessage
-• MCP: send_message, schedule_task, list_tasks, pause/resume/cancel/update_task, register_group
+• MCP: send_message, schedule_task, list_tasks, pause/resume/cancel/update_task, register_group, new_conversation
 
 *Container Tools:*
 • agent-browser: ✓

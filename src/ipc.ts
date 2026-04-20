@@ -23,6 +23,9 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  // Start a brand-new conversation on the platform with an opening assistant
+  // message. Resolves to no-op if no channel supports it (i.e. no Accomplice).
+  startConversation: (title: string, content: string) => Promise<void>;
 }
 
 let ipcWatcherRunning = false;
@@ -173,6 +176,9 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For new_conversation
+    title?: string;
+    content?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -420,6 +426,25 @@ export async function processTaskIpc(
         logger.warn(
           { sourceGroup },
           'Unauthorized refresh_groups attempt blocked',
+        );
+      }
+      break;
+
+    case 'new_conversation':
+      // Only main group can start brand-new conversations
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized new_conversation attempt blocked',
+        );
+        break;
+      }
+      if (data.title && data.content) {
+        await deps.startConversation(data.title, data.content);
+      } else {
+        logger.warn(
+          { data },
+          'Invalid new_conversation request - missing title or content',
         );
       }
       break;
