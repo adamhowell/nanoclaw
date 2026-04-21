@@ -294,8 +294,7 @@ async function buildContainerArgs(
     ]);
     const oauthToken =
       process.env.CLAUDE_CODE_OAUTH_TOKEN || claudeEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    const apiKey =
-      process.env.ANTHROPIC_API_KEY || claudeEnv.ANTHROPIC_API_KEY;
+    const apiKey = process.env.ANTHROPIC_API_KEY || claudeEnv.ANTHROPIC_API_KEY;
     if (oauthToken) {
       args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauthToken}`);
       logger.info({ containerName }, 'Claude OAuth token injected directly');
