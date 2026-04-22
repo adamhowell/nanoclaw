@@ -139,6 +139,25 @@ class AccompliceChannel implements Channel {
         const messageId = msg.message_id as number;
         let content = msg.content as string;
 
+        // Page context — hwm_app now sends the path + title of the page the
+        // user was on when they hit send, so prompts like "summarize the
+        // email I'm looking at" can be resolved without pasting a URL.
+        // Optional — older clients / scheduled-task runs don't include it.
+        const pageContext = msg.page_context as
+          | { url?: string; title?: string }
+          | undefined;
+        if (pageContext && (pageContext.url || pageContext.title)) {
+          const url = (pageContext.url || '').toString().trim();
+          const title = (pageContext.title || '').toString().trim();
+          const absUrl = url.startsWith('http')
+            ? url
+            : `https://app.hardworkmontage.com${url}`;
+          const hint = title
+            ? `[User context: viewing "${title}" at ${absUrl}]`
+            : `[User context: viewing ${absUrl}]`;
+          content = content ? `${hint}\n${content}` : hint;
+        }
+
         // Append file URLs to message content so the agent can see them
         const files = msg.files as
           | Array<{ filename: string; content_type: string; url: string }>
