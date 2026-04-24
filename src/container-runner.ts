@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { ChildProcess, exec, spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -10,26 +10,24 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
-  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { readEnvFile } from './env.js';
-import { OneCLI } from '@onecli-sh/sdk';
+import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
-
-const onecli = new OneCLI({ url: ONECLI_URL });
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -79,16 +77,8 @@ function buildVolumeMounts(
       readonly: true,
     });
 
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the OneCLI gateway, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
+    // .env shadowing is handled inside the container entrypoint via mount --bind
+    // (Apple Container only supports directory mounts, not file mounts like /dev/null)
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -224,93 +214,31 @@ function buildVolumeMounts(
   return mounts;
 }
 
-async function buildContainerArgs(
+function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  agentIdentifier?: string,
-): Promise<string[]> {
+  isMain: boolean,
+): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Pass through HWM API credentials if configured
-  const hwmEnv = readEnvFile(['HWM_API_TOKEN', 'HWM_API_URL']);
-  const hwmToken = process.env.HWM_API_TOKEN || hwmEnv.HWM_API_TOKEN;
-  const hwmUrl =
-    process.env.HWM_API_URL ||
-    hwmEnv.HWM_API_URL ||
-    'https://app.hardworkmontage.com/api/v1';
-  if (hwmToken) {
-    args.push('-e', `HWM_API_TOKEN=${hwmToken}`);
-    args.push('-e', `HWM_API_URL=${hwmUrl}`);
-  }
+  // Route API traffic through the credential proxy (containers never see real secrets)
+  args.push(
+    '-e',
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+  );
 
-  // Pass through GitHub token if configured
-  const ghEnv = readEnvFile(['GH_TOKEN']);
-  const ghToken = process.env.GH_TOKEN || ghEnv.GH_TOKEN;
-  if (ghToken) {
-    args.push('-e', `GH_TOKEN=${ghToken}`);
-    args.push('-e', `GITHUB_TOKEN=${ghToken}`);
-  }
-
-  // Pass through MS Graph credentials for dayjob integration
-  const msEnv = readEnvFile([
-    'MS_GRAPH_CLIENT_ID',
-    'MS_GRAPH_TENANT_ID',
-    'MS_GRAPH_CLIENT_SECRET',
-    'MS_GRAPH_USER',
-  ]);
-  const msClientId = process.env.MS_GRAPH_CLIENT_ID || msEnv.MS_GRAPH_CLIENT_ID;
-  if (msClientId) {
-    args.push('-e', `MS_GRAPH_CLIENT_ID=${msClientId}`);
-    args.push(
-      '-e',
-      `MS_GRAPH_TENANT_ID=${process.env.MS_GRAPH_TENANT_ID || msEnv.MS_GRAPH_TENANT_ID}`,
-    );
-    args.push(
-      '-e',
-      `MS_GRAPH_CLIENT_SECRET=${process.env.MS_GRAPH_CLIENT_SECRET || msEnv.MS_GRAPH_CLIENT_SECRET}`,
-    );
-    const msUser = process.env.MS_GRAPH_USER || msEnv.MS_GRAPH_USER;
-    if (msUser) {
-      args.push('-e', `MS_GRAPH_USER=${msUser}`);
-    }
-  }
-
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
+  // Mirror the host's auth method with a placeholder value.
+  // API key mode: SDK sends x-api-key, proxy replaces with real key.
+  // OAuth mode:   SDK exchanges placeholder token for temp API key,
+  //               proxy injects real OAuth token on that exchange request.
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
-    // Fallback: pass Claude credentials directly if OneCLI isn't available
-    const claudeEnv = readEnvFile([
-      'CLAUDE_CODE_OAUTH_TOKEN',
-      'ANTHROPIC_API_KEY',
-    ]);
-    const oauthToken =
-      process.env.CLAUDE_CODE_OAUTH_TOKEN || claudeEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    const apiKey = process.env.ANTHROPIC_API_KEY || claudeEnv.ANTHROPIC_API_KEY;
-    if (oauthToken) {
-      args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${oauthToken}`);
-      logger.info({ containerName }, 'Claude OAuth token injected directly');
-    } else if (apiKey) {
-      args.push('-e', `ANTHROPIC_API_KEY=${apiKey}`);
-      logger.info({ containerName }, 'Anthropic API key injected directly');
-    } else {
-      logger.warn(
-        { containerName },
-        'OneCLI gateway not reachable and no Claude credentials in .env — container will have no credentials',
-      );
-    }
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — using direct credential injection',
-    );
+    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
   // Runtime-specific args for host gateway resolution
@@ -322,7 +250,14 @@ async function buildContainerArgs(
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+    if (isMain) {
+      // Main containers start as root so the entrypoint can mount --bind
+      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
+      args.push('-e', `RUN_UID=${hostUid}`);
+      args.push('-e', `RUN_GID=${hostGid}`);
+    } else {
+      args.push('--user', `${hostUid}:${hostGid}`);
+    }
     args.push('-e', 'HOME=/home/node');
   }
 
@@ -353,15 +288,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  // Main group uses the default OneCLI agent; others use their own agent.
-  const agentIdentifier = input.isMain
-    ? undefined
-    : group.folder.toLowerCase().replace(/_/g, '-');
-  const containerArgs = await buildContainerArgs(
-    mounts,
-    containerName,
-    agentIdentifier,
-  );
+  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
 
   logger.debug(
     {
@@ -496,15 +423,15 @@ export async function runContainerAgent(
         { group: group.name, containerName },
         'Container timeout, stopping gracefully',
       );
-      exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
-        if (err) {
-          logger.warn(
-            { group: group.name, containerName, err },
-            'Graceful stop failed, force killing',
-          );
-          container.kill('SIGKILL');
-        }
-      });
+      try {
+        stopContainer(containerName);
+      } catch (err) {
+        logger.warn(
+          { group: group.name, containerName, err },
+          'Graceful stop failed, force killing',
+        );
+        container.kill('SIGKILL');
+      }
     };
 
     let timeout = setTimeout(killOnTimeout, timeoutMs);
