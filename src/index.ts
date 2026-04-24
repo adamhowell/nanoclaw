@@ -42,6 +42,7 @@ import {
   getNewMessages,
   getRouterState,
   initDatabase,
+  rebindRegisteredGroupJid,
   setRegisteredGroup,
   setRouterState,
   setSession,
@@ -632,6 +633,33 @@ async function main(): Promise<void> {
           logger.error({ err, chatJid }, 'Remote control command error'),
         );
         return;
+      }
+
+      // Auto-rebind: when an inbound user message lands on a chat_jid that
+      // isn't registered, but a sibling jid with the same channel prefix IS
+      // registered, transfer the registration to the new jid. Each HWM chat
+      // thread gets its own conversation_jid; without this, only the first
+      // thread Burnie ever saw would be processed.
+      if (
+        !msg.is_from_me &&
+        !msg.is_bot_message &&
+        !registeredGroups[chatJid] &&
+        chatJid.includes(':')
+      ) {
+        const prefix = chatJid.slice(0, chatJid.indexOf(':') + 1);
+        const oldJid = Object.keys(registeredGroups).find((k) =>
+          k.startsWith(prefix),
+        );
+        if (oldJid) {
+          const group = registeredGroups[oldJid];
+          delete registeredGroups[oldJid];
+          registeredGroups[chatJid] = group;
+          rebindRegisteredGroupJid(oldJid, chatJid);
+          logger.info(
+            { oldJid, newJid: chatJid, folder: group.folder },
+            'Rebound registered group to new conversation jid',
+          );
+        }
       }
 
       // Sender allowlist drop mode: discard messages from denied senders before storing

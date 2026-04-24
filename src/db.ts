@@ -633,6 +633,15 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
   );
 }
 
+// Rebind a registered group's jid in place (preserves folder and all other
+// fields). Used when a channel surfaces a new conversation jid that should
+// take over an existing folder's registration — see auto-rebind in index.ts.
+export function rebindRegisteredGroupJid(oldJid: string, newJid: string): void {
+  db.prepare(
+    `UPDATE registered_groups SET jid = ? WHERE jid = ?`,
+  ).run(newJid, oldJid);
+}
+
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
   const rows = db.prepare('SELECT * FROM registered_groups').all() as Array<{
     jid: string;
