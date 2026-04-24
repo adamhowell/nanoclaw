@@ -24,7 +24,7 @@ export interface IpcDeps {
   ) => void;
   onTasksChanged: () => void;
   // Start a brand-new conversation on the platform with an opening assistant
-  // message. Resolves to no-op if no channel supports it (i.e. no Accomplice).
+  // message. Resolves to no-op if no channel supports it (i.e. no HWM app).
   startConversation: (title: string, content: string) => Promise<void>;
 }
 
@@ -466,9 +466,9 @@ export async function processTaskIpc(
           );
           break;
         }
-        // Defense in depth: agent cannot set isMain via IPC.                                                                                                                                    
-        // Preserve isMain from the existing registration so IPC config                                                                                                                          
-        // updates (e.g. adding additionalMounts) don't strip the flag.                                                                                                                          
+        // Defense in depth: agent cannot set isMain via IPC.
+        // Preserve isMain from the existing registration so IPC config
+        // updates (e.g. adding additionalMounts) don't strip the flag.
         const existingGroup = registeredGroups[data.jid];
         deps.registerGroup(data.jid, {
           name: data.name,

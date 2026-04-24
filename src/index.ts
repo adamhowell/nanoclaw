@@ -766,7 +766,7 @@ async function main(): Promise<void> {
       const channel = channels.find((ch) => ch.startConversation);
       if (!channel) {
         throw new Error(
-          'No channel supports starting conversations (Accomplice not connected)',
+          'No channel supports starting conversations (HWM app not connected)',
         );
       }
       await channel.startConversation!(title, content);
