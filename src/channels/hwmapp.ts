@@ -1,9 +1,9 @@
 /**
- * Accomplice channel for NanoClaw.
+ * HWM app channel for NanoClaw.
  *
- * Connects outbound to accomplice.ai via WebSocket (ActionCable protocol).
- * Receives user messages from the web UI, delivers them to the agent,
- * and streams responses back through the relay.
+ * Connects outbound to app.hardworkmontage.com via WebSocket (ActionCable
+ * protocol). Receives user messages from the HWM web UI, delivers them to
+ * the agent, and streams responses back through the relay.
  */
 
 import WebSocket from 'ws';
@@ -20,22 +20,26 @@ import {
 
 import { ChannelOpts, registerChannel } from './registry.js';
 
+// Kept as `accomplice:` to preserve compatibility with existing chat_jids in
+// messages.db and the routing in router.ts findChannel(). Renaming would
+// require migrating every stored chat_jid.
 const JID_PREFIX = 'accomplice:';
 const RECONNECT_DELAY = 5000;
 
+// Env var names kept for compatibility with existing .env files.
 const envVars = readEnvFile(['ACCOMPLICE_URL', 'ACCOMPLICE_TOKEN']);
-const ACCOMPLICE_URL = process.env.ACCOMPLICE_URL || envVars.ACCOMPLICE_URL;
-const ACCOMPLICE_TOKEN =
+const HWM_URL = process.env.ACCOMPLICE_URL || envVars.ACCOMPLICE_URL;
+const HWM_TOKEN =
   process.env.ACCOMPLICE_TOKEN || envVars.ACCOMPLICE_TOKEN;
 
-/** Maps conversation JID -> pending assistant message ID on the Accomplice side */
+/** Maps conversation JID -> pending assistant message ID on the HWM side */
 type PendingResponses = Map<string, number>;
 
 /** Opening-message content waiting for a conversation_started confirmation */
 type PendingNewConversation = { title: string; content: string };
 
-class AccompliceChannel implements Channel {
-  name = 'accomplice';
+class HwmAppChannel implements Channel {
+  name = 'hwmapp';
 
   private ws: WebSocket | null = null;
   private connected = false;
@@ -60,13 +64,13 @@ class AccompliceChannel implements Channel {
   }
 
   private doConnect(): void {
-    const url = `${ACCOMPLICE_URL}?agent_token=${ACCOMPLICE_TOKEN}`;
-    logger.info({ url: ACCOMPLICE_URL }, 'Accomplice: connecting');
+    const url = `${HWM_URL}?agent_token=${HWM_TOKEN}`;
+    logger.info({ url: HWM_URL }, 'HWM app: connecting');
 
     this.ws = new WebSocket(url);
 
     this.ws.on('open', () => {
-      logger.info('Accomplice: WebSocket connected');
+      logger.info('HWM app: WebSocket connected');
       // Subscribe to the relay channel (ActionCable protocol)
       this.ws!.send(
         JSON.stringify({
@@ -81,7 +85,7 @@ class AccompliceChannel implements Channel {
         const frame = JSON.parse(raw.toString());
         this.handleFrame(frame);
       } catch (err) {
-        logger.error({ err }, 'Accomplice: failed to parse frame');
+        logger.error({ err }, 'HWM app: failed to parse frame');
       }
     });
 
@@ -90,13 +94,13 @@ class AccompliceChannel implements Channel {
       this.connected = false;
       logger.warn(
         { code },
-        `Accomplice: WebSocket closed, reconnecting in ${RECONNECT_DELAY / 1000}s`,
+        `HWM app: WebSocket closed, reconnecting in ${RECONNECT_DELAY / 1000}s`,
       );
       this.scheduleReconnect();
     });
 
     this.ws.on('error', (err: Error) => {
-      logger.error({ err }, 'Accomplice: WebSocket error');
+      logger.error({ err }, 'HWM app: WebSocket error');
     });
   }
 
@@ -111,22 +115,22 @@ class AccompliceChannel implements Channel {
 
     if (frame.type === 'confirm_subscription') {
       this.connected = true;
-      logger.info('Accomplice: subscribed to relay channel');
+      logger.info('HWM app: subscribed to relay channel');
       return;
     }
 
     if (frame.type === 'reject_subscription') {
       logger.error(
-        'Accomplice: subscription rejected — check ACCOMPLICE_TOKEN',
+        'HWM app: subscription rejected — check ACCOMPLICE_TOKEN',
       );
       return;
     }
 
-    // Data message from Accomplice
+    // Data message from HWM
     if (frame.message) {
       logger.info(
         { identifier: frame.identifier, expectedIdentifier: this.identifier },
-        'Accomplice: received data frame',
+        'HWM app: received data frame',
       );
       this.handleMessage(frame.message);
     }
@@ -188,8 +192,8 @@ class AccompliceChannel implements Channel {
         this.onChatMetadata(
           jid,
           new Date().toISOString(),
-          'Accomplice',
-          'accomplice',
+          'HWM App',
+          'hwmapp',
           false,
         );
         this.onMessage(jid, newMsg);
@@ -198,12 +202,12 @@ class AccompliceChannel implements Channel {
 
       case 'new_conversation': {
         const jid = msg.conversation_jid as string;
-        const name = (msg.name as string) || 'Accomplice';
+        const name = (msg.name as string) || 'HWM App';
         this.onChatMetadata(
           jid,
           new Date().toISOString(),
           name,
-          'accomplice',
+          'hwmapp',
           false,
         );
         break;
@@ -213,9 +217,9 @@ class AccompliceChannel implements Channel {
         // Response to an agent-initiated start_conversation action. Post the
         // queued opening message into the newly-created conversation.
         const jid = msg.conversation_jid as string;
-        const title = (msg.title as string) || 'Accomplice';
+        const title = (msg.title as string) || 'HWM App';
         if (!jid) {
-          logger.warn({ msg }, 'Accomplice: conversation_started missing jid');
+          logger.warn({ msg }, 'HWM app: conversation_started missing jid');
           break;
         }
 
@@ -223,7 +227,7 @@ class AccompliceChannel implements Channel {
           jid,
           new Date().toISOString(),
           title,
-          'accomplice',
+          'hwmapp',
           false,
         );
 
@@ -233,7 +237,7 @@ class AccompliceChannel implements Channel {
         if (!pending) {
           logger.warn(
             { jid, title },
-            'Accomplice: conversation_started with no pending opener',
+            'HWM app: conversation_started with no pending opener',
           );
           break;
         }
@@ -248,13 +252,13 @@ class AccompliceChannel implements Channel {
         });
         logger.info(
           { jid, title },
-          'Accomplice: posted opening message into new conversation',
+          'HWM app: posted opening message into new conversation',
         );
         break;
       }
 
       default:
-        logger.debug({ type: msg.type }, 'Accomplice: unknown message type');
+        logger.debug({ type: msg.type }, 'HWM app: unknown message type');
     }
   }
 
@@ -262,19 +266,19 @@ class AccompliceChannel implements Channel {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       logger.warn(
         { title },
-        'Accomplice: cannot start conversation — not connected',
+        'HWM app: cannot start conversation — not connected',
       );
       return;
     }
 
     this.pendingNewConversations.push({ title, content });
     this.sendAction('start_conversation', { title });
-    logger.info({ title }, 'Accomplice: requested new conversation');
+    logger.info({ title }, 'HWM app: requested new conversation');
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.warn({ jid }, 'Accomplice: cannot send — not connected');
+      logger.warn({ jid }, 'HWM app: cannot send — not connected');
       return;
     }
 
@@ -344,12 +348,12 @@ class AccompliceChannel implements Channel {
   }
 }
 
-registerChannel('accomplice', (opts: ChannelOpts) => {
-  if (!ACCOMPLICE_URL || !ACCOMPLICE_TOKEN) {
+registerChannel('hwmapp', (opts: ChannelOpts) => {
+  if (!HWM_URL || !HWM_TOKEN) {
     logger.info(
-      'Accomplice: skipping — ACCOMPLICE_URL or ACCOMPLICE_TOKEN not set',
+      'HWM app: skipping — ACCOMPLICE_URL or ACCOMPLICE_TOKEN not set',
     );
     return null;
   }
-  return new AccompliceChannel(opts);
+  return new HwmAppChannel(opts);
 });
