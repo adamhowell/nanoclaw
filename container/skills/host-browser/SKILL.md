@@ -82,6 +82,11 @@ Parameters:
   conversation thread.
 - `waitMs` — extra wait in ms (max 10000). Use 1500-3000 for SPAs.
 - `headers` — optional extra request headers as an object.
+- `ephemeral` — if `true`, opens a fresh tab and closes it after the
+  fetch. Default is `false` — tabs stick per-domain so visit/close
+  rhythm doesn't look like automation. Only set this for one-off
+  arbitrary URLs you'll never revisit (random news article scrape,
+  etc.). Anything on Etsy / Amazon Seller / Stripe should be sticky.
 
 ### Extract a specific selector with a click first
 
