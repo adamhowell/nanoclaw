@@ -136,7 +136,16 @@ curl -s "$HOST_BROWSER_URL/health"
   uses is a tracking redirect:
   `https://ablink.account.etsy.com/ss/c/...`. Pass it directly to
   `/fetch` — host-browser will follow the redirect and land on the
-  real `etsy.com/messages/...` page (still logged in).
+  real `etsy.com/messages/{id}` page (still logged in).
+- **Etsy URL paths are inconsistent — use exactly these:**
+  - Messages inbox: `https://www.etsy.com/messages` (NOT `/your/messages`)
+  - Specific conversation: `https://www.etsy.com/messages/{id}`
+  - Shop dashboard: `https://www.etsy.com/your/shops/me/dashboard`
+  - Account settings: `https://www.etsy.com/your/account`
+  Don't extrapolate. Wrong paths trigger Cloudflare/DataDome and
+  can burn the session reputation. The Mini has a permanent tab
+  on `etsy.com/messages` that the host-browser-service adopts —
+  hitting that URL will reuse it instead of opening a duplicate.
 - Never paste cookie values from this service into prompts or files.
   Cookies live in the persistent profile only.
 
