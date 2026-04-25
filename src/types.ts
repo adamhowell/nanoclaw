@@ -89,6 +89,10 @@ export interface Channel {
   disconnect(): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  // Optional: transient progress text shown in the chat UI while the agent
+  // is working (e.g. "Reading memory-pres_sales"). Implemented by channels
+  // whose platform has a way to display these (currently: hwmapp).
+  sendStatusUpdate?(jid: string, text: string): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
   // Optional: start a brand-new conversation on the platform and post an

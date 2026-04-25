@@ -36,6 +36,12 @@ interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  // Tool-use progress event surfaced from inside the SDK's assistant stream.
+  // Emitted whenever Claude invokes a tool so the host can forward a
+  // human-readable status string ("Reading memory-jordan_cmo", "Grepping for
+  // 'q3 revenue'") to the chat UI between the initial ack and the final
+  // message.
+  statusEvent?: { tool: string; text: string };
 }
 
 interface SessionEntry {
@@ -326,6 +332,88 @@ function waitForIpcMessage(): Promise<string | null> {
 }
 
 /**
+ * Best-effort one-line description of a tool invocation, suitable for showing
+ * in the chat UI as a transient status update. Falls back to the bare tool
+ * name when we don't have a specific renderer.
+ */
+function summarizeToolUse(name: string, input: unknown): string {
+  const i = (input || {}) as Record<string, unknown>;
+  const str = (k: string): string => {
+    const v = i[k];
+    return typeof v === 'string' ? v : '';
+  };
+  const basename = (p: string): string => p.split('/').pop() || p;
+  const trunc = (s: string, n: number): string =>
+    s.length > n ? s.slice(0, n - 1) + '…' : s;
+
+  switch (name) {
+    case 'Read': {
+      const p = str('file_path');
+      return p ? `Reading ${basename(p)}` : 'Reading file';
+    }
+    case 'Write': {
+      const p = str('file_path');
+      return p ? `Writing ${basename(p)}` : 'Writing file';
+    }
+    case 'Edit': {
+      const p = str('file_path');
+      return p ? `Editing ${basename(p)}` : 'Editing file';
+    }
+    case 'Glob': {
+      const p = str('pattern');
+      return p ? `Searching ${trunc(p, 60)}` : 'Searching files';
+    }
+    case 'Grep': {
+      const p = str('pattern');
+      return p ? `Grepping for ${trunc(p, 60)}` : 'Grepping';
+    }
+    case 'Bash': {
+      const cmd = str('command');
+      return cmd ? `Running: ${trunc(cmd, 80)}` : 'Running shell';
+    }
+    case 'WebFetch': {
+      const url = str('url');
+      try {
+        const host = url ? new URL(url).hostname : '';
+        return host ? `Fetching ${host}` : 'Fetching URL';
+      } catch {
+        return 'Fetching URL';
+      }
+    }
+    case 'WebSearch': {
+      const q = str('query');
+      return q ? `Searching: ${trunc(q, 60)}` : 'Searching the web';
+    }
+    case 'TodoWrite':
+      return 'Updating todo list';
+    case 'Task': {
+      const d = str('description') || str('subagent_type');
+      return d ? `Spawning subagent: ${trunc(d, 60)}` : 'Spawning subagent';
+    }
+    case 'TaskOutput':
+      return 'Reading subagent output';
+    case 'TaskStop':
+      return 'Stopping subagent';
+    case 'NotebookEdit':
+      return 'Editing notebook';
+    case 'ToolSearch':
+      return 'Searching available tools';
+    case 'Skill': {
+      const s = str('skill');
+      return s ? `Running skill: ${s}` : 'Running skill';
+    }
+    default:
+      // mcp__server__tool — strip the prefix for readability
+      if (name.startsWith('mcp__')) {
+        const parts = name.split('__');
+        const short = parts[parts.length - 1] || name;
+        return `Calling ${short}`;
+      }
+      return `Calling ${name}`;
+  }
+}
+
+/**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
  * allowing agent teams subagents to run to completion.
@@ -437,6 +525,23 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+
+      // Surface tool_use blocks as transient status events so the host can
+      // show "Reading memory-pres_sales" / "Grepping for 'q3 revenue'" /
+      // etc. in the chat UI while the agent is working. Only the final
+      // text response goes through writeOutput's `result` path.
+      const blocks =
+        (message as { message?: { content?: Array<{ type?: string; name?: string; input?: unknown }> } }).message?.content || [];
+      for (const block of blocks) {
+        if (block.type === 'tool_use' && typeof block.name === 'string') {
+          const text = summarizeToolUse(block.name, block.input);
+          writeOutput({
+            status: 'success',
+            result: null,
+            statusEvent: { tool: block.name, text },
+          });
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {

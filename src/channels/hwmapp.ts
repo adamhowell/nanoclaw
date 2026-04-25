@@ -325,6 +325,15 @@ class HwmAppChannel implements Channel {
     });
   }
 
+  async sendStatusUpdate(jid: string, text: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    this.sendAction('status_update', {
+      conversation_jid: jid,
+      text,
+    });
+  }
+
   // --- Private helpers ---
 
   private sendAction(action: string, data: Record<string, unknown>): void {

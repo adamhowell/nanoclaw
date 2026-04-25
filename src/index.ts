@@ -286,7 +286,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let outputSentToUser = false;
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
+    // Streaming output callback — called for each agent result.
+    // Tool-use progress events are emitted with result=null and statusEvent
+    // set; forward them to the channel (if it supports status updates) so
+    // the chat UI can show "Reading memory-jordan_cmo" / "Grepping for ..."
+    // while the agent is still working. Don't reset the idle timer on
+    // these — they're transient and shouldn't extend the session.
+    if (result.statusEvent) {
+      try {
+        await channel.sendStatusUpdate?.(chatJid, result.statusEvent.text);
+      } catch (err) {
+        logger.debug({ err }, 'sendStatusUpdate failed (non-fatal)');
+      }
+    }
+
     if (result.result) {
       const raw =
         typeof result.result === 'string'

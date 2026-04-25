@@ -49,6 +49,13 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  // Transient progress event from inside the SDK's assistant stream — emitted
+  // by the agent-runner whenever Claude invokes a tool. The host forwards
+  // these to channels as a `status_update` action so chat UIs can render
+  // "Reading memory-jordan_cmo" / "Grepping for 'q3 revenue'" while the
+  // agent is still working. `result` is null on these frames; the final
+  // assistant text still arrives in a separate frame with `result` set.
+  statusEvent?: { tool: string; text: string };
 }
 
 interface VolumeMount {
