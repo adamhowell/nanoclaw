@@ -29,8 +29,7 @@ const RECONNECT_DELAY = 5000;
 // Env var names kept for compatibility with existing .env files.
 const envVars = readEnvFile(['ACCOMPLICE_URL', 'ACCOMPLICE_TOKEN']);
 const HWM_URL = process.env.ACCOMPLICE_URL || envVars.ACCOMPLICE_URL;
-const HWM_TOKEN =
-  process.env.ACCOMPLICE_TOKEN || envVars.ACCOMPLICE_TOKEN;
+const HWM_TOKEN = process.env.ACCOMPLICE_TOKEN || envVars.ACCOMPLICE_TOKEN;
 
 /** Maps conversation JID -> pending assistant message ID on the HWM side */
 type PendingResponses = Map<string, number>;
@@ -120,9 +119,7 @@ class HwmAppChannel implements Channel {
     }
 
     if (frame.type === 'reject_subscription') {
-      logger.error(
-        'HWM app: subscription rejected — check ACCOMPLICE_TOKEN',
-      );
+      logger.error('HWM app: subscription rejected — check ACCOMPLICE_TOKEN');
       return;
     }
 

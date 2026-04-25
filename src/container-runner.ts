@@ -11,6 +11,7 @@ import {
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
+  HOST_BROWSER_PORT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -235,6 +236,16 @@ function buildContainerArgs(
   args.push(
     '-e',
     `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+  );
+
+  // Point the host-browser skill at the persistent macOS Chromium
+  // service running on the host. The agent skill (container/skills/
+  // host-browser/SKILL.md) curls this for any authed/bot-protected
+  // URL — so DataDome / Cloudflare see a real residential macOS
+  // Chromium instead of a headless Linux container.
+  args.push(
+    '-e',
+    `HOST_BROWSER_URL=http://${CONTAINER_HOST_GATEWAY}:${HOST_BROWSER_PORT}`,
   );
 
   // Mirror the host's auth method with a placeholder value.
