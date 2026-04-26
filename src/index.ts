@@ -395,7 +395,8 @@ async function runAgent(
   // drop it; the next turn will start fresh.
   const isErrorResult = (output: ContainerOutput) =>
     output.status === 'error' ||
-    (typeof output.result === 'string' && /^API Error:?\b/i.test(output.result.trim()));
+    (typeof output.result === 'string' &&
+      /^API Error:?\b/i.test(output.result.trim()));
 
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
@@ -404,7 +405,11 @@ async function runAgent(
           setSession(group.folder, output.newSessionId);
         } else if (isErrorResult(output)) {
           logger.warn(
-            { group: group.name, sessionId: output.newSessionId, result: output.result },
+            {
+              group: group.name,
+              sessionId: output.newSessionId,
+              result: output.result,
+            },
             'Dropping session id from errored result to prevent replay',
           );
           delete sessions[group.folder];
@@ -436,7 +441,8 @@ async function runAgent(
     // messages the SDK occasionally turns into plain string results.
     const finalIsError =
       output.status === 'error' ||
-      (typeof output.result === 'string' && /^API Error:?\b/i.test(output.result.trim()));
+      (typeof output.result === 'string' &&
+        /^API Error:?\b/i.test(output.result.trim()));
     if (output.newSessionId && !finalIsError) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
@@ -444,7 +450,11 @@ async function runAgent(
       delete sessions[group.folder];
       setSession(group.folder, '');
       logger.warn(
-        { group: group.name, sessionId: output.newSessionId, result: output.result },
+        {
+          group: group.name,
+          sessionId: output.newSessionId,
+          result: output.result,
+        },
         'Dropped session id after errored final result',
       );
     }
