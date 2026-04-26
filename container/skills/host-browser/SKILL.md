@@ -25,6 +25,29 @@ HOST_BROWSER_URL = http://192.168.64.1:8765
 (Set in your container env. Use `$HOST_BROWSER_URL` if available, else
 the literal URL above.)
 
+## When NOT to use
+
+**Never** use host-browser for `app.hardworkmontage.com` or any other
+of Adam's own apps. They are not bot-protected, and you already have:
+
+- An `HWM_API_TOKEN` in your env for the JSON API at
+  `https://app.hardworkmontage.com/api/v1`.
+- The hwm_app source code mounted at `/workspace/group/hwm_app/` — you
+  can `grep` routes, models, controllers directly to figure out what
+  the API supports.
+
+Reaching for a screenshot to "see what the page looks like" on an
+internal app is a debugging anti-pattern borrowed from real
+bot-protected sites. For our own Rails apps, instead:
+
+1. Read the API response body — it'll have the answer.
+2. Grep the source at `/workspace/group/hwm_app/` for the route /
+   controller / model.
+3. Ask Adam if the API surface doesn't expose what you need (don't
+   work around it with a screenshot).
+
+Getting this wrong has bitten us — see "Failure modes" below.
+
 ## When to use
 
 ALWAYS use host-browser for:
@@ -109,10 +132,26 @@ Use this when you need to *show* the user what a page looked like
 (returns image/png, not JSON):
 
 ```bash
-curl -s -X POST "$HOST_BROWSER_URL/screenshot" \
+curl -fsS -X POST "$HOST_BROWSER_URL/screenshot" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://...", "fullPage": true, "waitMs": 2000}' \
   -o /tmp/screenshot.png
+```
+
+**The `-f` flag is mandatory.** Without it, a 401/403/500 from the
+service writes the JSON error body into your `.png` file (e.g.
+24 bytes of `{"error":"unauthorized"}`). If you then `Read` that file,
+Claude tries to decode JSON as PNG, the API returns
+`Could not process image`, and the bad image is permanently baked
+into the session transcript — every `--resume` re-sends it and
+re-fails. With `-fsS`, curl exits non-zero on HTTP errors and
+writes nothing.
+
+After the screenshot, sanity-check the file size before reading it:
+
+```bash
+test $(stat -f%z /tmp/screenshot.png 2>/dev/null || stat -c%s /tmp/screenshot.png) -gt 1000 \
+  || { echo "screenshot is suspiciously small — probably an error response"; exit 1; }
 ```
 
 ### Health check
@@ -158,3 +197,12 @@ curl -s "$HOST_BROWSER_URL/health"
 - `status: 200` but `content` is empty / short: the page rendered
   with JS — pass a `waitFor` selector that matches the actual
   content area.
+- **24-byte `.png` containing JSON**: you used `curl` without `-f` on
+  the `/screenshot` endpoint and the service returned 401/403/500.
+  Curl wrote the error body into the file. If you `Read` that file,
+  the Claude API returns `Could not process image` and the bad image
+  is baked into the session transcript — every resume re-fails.
+  Always use `curl -fsS` and size-check the output (see Screenshot
+  section). If you've already poisoned a session with this pattern,
+  it's not recoverable from inside the agent — Adam needs to delete
+  the session jsonl on Burnie to recover.

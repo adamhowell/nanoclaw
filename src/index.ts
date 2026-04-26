@@ -358,7 +358,13 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+  // Session lookup is keyed by (group folder + chat jid) so each
+  // conversation has its own Claude Code session and they don't bleed
+  // into each other. Scheduled tasks with context_mode='group' still
+  // key by just the group folder (see task-scheduler.ts) — those use
+  // a separate session reserved for the group's "main" context.
+  const sessionKey = `${group.folder}:${chatJid}`;
+  const sessionId = sessions[sessionKey];
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -401,19 +407,20 @@ async function runAgent(
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId && !isErrorResult(output)) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
+          sessions[sessionKey] = output.newSessionId;
+          setSession(sessionKey, output.newSessionId);
         } else if (isErrorResult(output)) {
           logger.warn(
             {
               group: group.name,
+              chatJid,
               sessionId: output.newSessionId,
               result: output.result,
             },
             'Dropping session id from errored result to prevent replay',
           );
-          delete sessions[group.folder];
-          setSession(group.folder, '');
+          delete sessions[sessionKey];
+          setSession(sessionKey, '');
         }
         await onOutput(output);
       }
@@ -444,14 +451,15 @@ async function runAgent(
       (typeof output.result === 'string' &&
         /^API Error:?\b/i.test(output.result.trim()));
     if (output.newSessionId && !finalIsError) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
+      sessions[sessionKey] = output.newSessionId;
+      setSession(sessionKey, output.newSessionId);
     } else if (finalIsError) {
-      delete sessions[group.folder];
-      setSession(group.folder, '');
+      delete sessions[sessionKey];
+      setSession(sessionKey, '');
       logger.warn(
         {
           group: group.name,
+          chatJid,
           sessionId: output.newSessionId,
           result: output.result,
         },
