@@ -361,15 +361,15 @@ function summarizeToolUse(name: string, input: unknown): string {
     }
     case 'Glob': {
       const p = str('pattern');
-      return p ? `Searching ${trunc(p, 60)}` : 'Searching files';
+      return p ? `Searching ${trunc(p, 200)}` : 'Searching files';
     }
     case 'Grep': {
       const p = str('pattern');
-      return p ? `Grepping for ${trunc(p, 60)}` : 'Grepping';
+      return p ? `Grepping for ${trunc(p, 200)}` : 'Grepping';
     }
     case 'Bash': {
       const cmd = str('command');
-      return cmd ? `Running: ${trunc(cmd, 80)}` : 'Running shell';
+      return cmd ? `Running: ${trunc(cmd, 200)}` : 'Running shell';
     }
     case 'WebFetch': {
       const url = str('url');
@@ -382,13 +382,13 @@ function summarizeToolUse(name: string, input: unknown): string {
     }
     case 'WebSearch': {
       const q = str('query');
-      return q ? `Searching: ${trunc(q, 60)}` : 'Searching the web';
+      return q ? `Searching: ${trunc(q, 200)}` : 'Searching the web';
     }
     case 'TodoWrite':
       return 'Updating todo list';
     case 'Task': {
       const d = str('description') || str('subagent_type');
-      return d ? `Spawning subagent: ${trunc(d, 60)}` : 'Spawning subagent';
+      return d ? `Spawning subagent: ${trunc(d, 200)}` : 'Spawning subagent';
     }
     case 'TaskOutput':
       return 'Reading subagent output';
