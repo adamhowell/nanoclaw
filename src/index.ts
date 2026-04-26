@@ -386,12 +386,29 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
-  // Wrap onOutput to track session ID from streamed results
+  // Wrap onOutput to track session ID from streamed results.
+  //
+  // CRITICAL: do NOT persist newSessionId when the SDK returned an
+  // error (e.g., "API Error 400 Could not process image"). Doing so
+  // poisons future turns — the bad session is replayed on every
+  // subsequent message and never recovers. If a session errored,
+  // drop it; the next turn will start fresh.
+  const isErrorResult = (output: ContainerOutput) =>
+    output.status === 'error' ||
+    (typeof output.result === 'string' && /^API Error:?\b/i.test(output.result.trim()));
+
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
+        if (output.newSessionId && !isErrorResult(output)) {
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
+        } else if (isErrorResult(output)) {
+          logger.warn(
+            { group: group.name, sessionId: output.newSessionId, result: output.result },
+            'Dropping session id from errored result to prevent replay',
+          );
+          delete sessions[group.folder];
+          setSession(group.folder, '');
         }
         await onOutput(output);
       }
@@ -413,9 +430,23 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
+    // Same poisoning rule as the streaming path: don't save the
+    // session ID if the final result was an SDK error. The text
+    // pattern check matches "API Error: 400 …" and similar
+    // messages the SDK occasionally turns into plain string results.
+    const finalIsError =
+      output.status === 'error' ||
+      (typeof output.result === 'string' && /^API Error:?\b/i.test(output.result.trim()));
+    if (output.newSessionId && !finalIsError) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
+    } else if (finalIsError) {
+      delete sessions[group.folder];
+      setSession(group.folder, '');
+      logger.warn(
+        { group: group.name, sessionId: output.newSessionId, result: output.result },
+        'Dropped session id after errored final result',
+      );
     }
 
     if (output.status === 'error') {
