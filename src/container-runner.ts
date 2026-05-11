@@ -228,11 +228,19 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  chatJid?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Conversation context. Skills that call hwm_app's API can pass this
+  // value as `conversation_jid` so the server can link the resulting
+  // record (focus contract, etc.) back to the originating /chat.
+  if (chatJid) {
+    args.push('-e', `NANOCLAW_CHAT_JID=${chatJid}`);
+  }
 
   // Pass through HWM API credentials if configured
   const hwmEnv = readEnvFile(['HWM_API_TOKEN', 'HWM_API_URL']);
@@ -361,6 +369,7 @@ export async function runContainerAgent(
     mounts,
     containerName,
     agentIdentifier,
+    input.chatJid,
   );
 
   logger.debug(
