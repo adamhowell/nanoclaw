@@ -46,7 +46,8 @@ curl -s -X POST -H "Authorization: Bearer $HWM_API_TOKEN" \
     "goal": "ship the welcome email",
     "blocked_categories": ["social", "news"],
     "allowed_categories": ["development"],
-    "success_signal": "PR opened"
+    "success_signal": "PR opened",
+    "conversation_jid": "'"$NANOCLAW_CHAT_JID"'"
   }' \
   "$HWM_API_URL/accomplice/focus_contracts"
 ```
@@ -56,6 +57,12 @@ curl -s -X POST -H "Authorization: Bearer $HWM_API_TOKEN" \
 **Optional:** `goal`, `blocked_categories[]`, `allowed_categories[]`, `success_signal`.
 `blocked_categories` / `allowed_categories` can be sent as a JSON array
 or a comma-separated string.
+
+**Always pass `conversation_jid`** (the value of the `$NANOCLAW_CHAT_JID`
+environment variable). The server uses it to link the contract back to
+the chat you're in, so it can drop start/nudge/grade cards inline and
+auto-end the session if Adam deletes the chat. Omitting it doesn't fail
+the request, but Adam loses those affordances.
 
 Returns `201` + `{ "contract": { id, title, status, ends_at, ... } }`.
 Returns `409 already_active` if a session is already running — fetch the
