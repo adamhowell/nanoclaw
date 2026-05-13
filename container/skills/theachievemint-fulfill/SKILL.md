@@ -1,6 +1,6 @@
 ---
 name: theachievemint-fulfill
-description: Process pending Achieve Mint orders end-to-end — match a front template, override the back template text per customer, render to verify layout, export laser-ready SVGs, drop them in the handoff outbox with sequential numbering, and mark items completed. Use when Adam asks "fulfill the queue" / "run fulfillment" / "process pending orders" or when a scheduled fulfillment task fires.
+description: Process pending Achieve Mint orders end-to-end — match a front template, override the back template text per customer, render to verify layout, export laser-ready SVGs, drop them in the handoff outbox with sequential numbering, and mark items completed. ONLY use when Adam explicitly asks ("fulfill the queue" / "run fulfillment" / "process pending orders" / "process Sarah's order"). Never run autonomously — there is no scheduled trigger, and Etsy orders are not in this pipeline. If a related topic comes up in chat without an explicit ask, do not start the loop.
 ---
 
 # Achieve Mint — Order Fulfillment
