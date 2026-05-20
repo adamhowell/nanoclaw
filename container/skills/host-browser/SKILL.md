@@ -3,7 +3,7 @@ name: host-browser
 description: Fetch real web pages through Adam's Mac Mini's persistent macOS Chromium. Use this for ANY URL that requires login (Etsy seller messages, Amazon Seller Central, Shopify, Stripe dashboard, Mercury) OR any site that aggressively bot-blocks (DataDome, Cloudflare, Imperva). Cookies for already-logged-in sites are persisted, so you read pages exactly as Adam would.
 ---
 
-# Host Browser — real macOS Chromium for authed/protected sites
+# Host Browser — real macOS Chrome for authed/protected sites
 
 When you need to read content from a site that has bot protection or
 requires being logged in, do NOT use `agent-browser` (Playwright in
@@ -12,9 +12,10 @@ with a headless Chromium fingerprint that Etsy, Amazon, Cloudflare,
 etc. block on sight.
 
 Instead, hit the host browser service. It runs on the Mac Mini host,
-in headed Chromium with a long-lived persistent profile that holds
-Adam's real login cookies. From the site's perspective, your fetches
-look identical to Adam clicking around in his own browser.
+in **headed Chrome.app** (not Chromium) with a long-lived persistent
+profile that holds Adam's real login cookies. From the site's
+perspective, your fetches look identical to Adam clicking around in
+his own browser.
 
 ## Endpoint
 
@@ -24,6 +25,28 @@ HOST_BROWSER_URL = http://192.168.64.1:8765
 
 (Set in your container env. Use `$HOST_BROWSER_URL` if available, else
 the literal URL above.)
+
+## Authentication — REQUIRED
+
+Every request must carry an `X-Auth` header matching the
+`HOST_BROWSER_TOKEN` env var in your container. Without it the
+service returns `401 unauthorized` and your fetch fails silently.
+
+```bash
+curl -s "$HOST_BROWSER_URL/health" -H "X-Auth: $HOST_BROWSER_TOKEN"
+```
+
+If you ever see `{"error":"unauthorized"}` in the response, **the
+service is fine** — your container is missing `HOST_BROWSER_TOKEN`,
+or you forgot the header. Don't conclude "host-browser is broken"
+and tell Adam to fix it. Either:
+
+1. Re-export your env: `source /workspace/group/accomplice_api.env`
+   then retry with `-H "X-Auth: $HOST_BROWSER_TOKEN"`.
+2. If `HOST_BROWSER_TOKEN` is genuinely unset in your environment,
+   that's the only thing to flag to Adam — not the service itself.
+
+Every example below includes the header. Don't skip it.
 
 ## When NOT to use
 
@@ -75,9 +98,10 @@ All endpoints return JSON unless noted. POST bodies are JSON.
 
 ```bash
 curl -s -X POST "$HOST_BROWSER_URL/fetch" \
+  -H "X-Auth: $HOST_BROWSER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://www.etsy.com/your/messages",
+    "url": "https://www.etsy.com/messages",
     "extract": "text",
     "waitMs": 1500
   }'
@@ -87,7 +111,7 @@ Response:
 
 ```json
 {
-  "final_url": "https://www.etsy.com/your/messages",
+  "final_url": "https://www.etsy.com/messages",
   "status": 200,
   "title": "Etsy - Messages",
   "content": "..."
@@ -117,6 +141,7 @@ For "click 'Show full message' then extract the body" flows:
 
 ```bash
 curl -s -X POST "$HOST_BROWSER_URL/click" \
+  -H "X-Auth: $HOST_BROWSER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://www.etsy.com/messages/123",
@@ -133,6 +158,7 @@ Use this when you need to *show* the user what a page looked like
 
 ```bash
 curl -fsS -X POST "$HOST_BROWSER_URL/screenshot" \
+  -H "X-Auth: $HOST_BROWSER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://...", "fullPage": true, "waitMs": 2000}' \
   -o /tmp/screenshot.png
@@ -157,14 +183,14 @@ test $(stat -f%z /tmp/screenshot.png 2>/dev/null || stat -c%s /tmp/screenshot.pn
 ### Health check
 
 ```bash
-curl -s "$HOST_BROWSER_URL/health"
+curl -s "$HOST_BROWSER_URL/health" -H "X-Auth: $HOST_BROWSER_TOKEN"
 # {"ok":true,"profile":"...","headless":false,"pid":...}
 ```
 
 ## Tips
 
 - **First call to a domain may be slow** (3-10 seconds). Subsequent
-  calls reuse the same Chromium context and are fast (<1s).
+  calls reuse the same Chrome context and are fast (<1s).
 - If you get a 403 or login wall on a site you expected to be logged
   into, ask Adam to run `npm run login -- <preset>` on the Mini
   (presets include `etsy`, `amazon-seller`, `stripe`, `shopify`,
@@ -190,6 +216,11 @@ curl -s "$HOST_BROWSER_URL/health"
 
 ## Failure modes
 
+- **`{"error":"unauthorized"}` (HTTP 401):** you forgot the
+  `-H "X-Auth: $HOST_BROWSER_TOKEN"` header, or `HOST_BROWSER_TOKEN`
+  isn't set in your container env. Re-export from
+  `/workspace/group/accomplice_api.env`, retry. Don't tell Adam
+  "the service is broken" without confirming the header is set.
 - `503` from the service: the browser context crashed. It auto-
   reopens on the next request — just retry once.
 - `status: 403` in the JSON response: site is still bot-blocking. The

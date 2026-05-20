@@ -1,6 +1,6 @@
 ---
 name: hwm-api
-description: Access Adam's email, todos, calendar, orders, notes, contacts, weather, and briefings via the HWM API. Use when the user asks about any of these.
+description: Access Adam's email, todos, calendar, orders, notes, contacts, weather, briefings, and voice calls via the HWM API. Use when the user asks about any of these.
 ---
 
 # HWM API — Personal Data Access
@@ -166,6 +166,64 @@ Adam gets morning (6 AM ET) and evening (6 PM ET) briefings. When generating one
    - **Evening**: Today's accomplishments → tomorrow preview → inbox wrap-up → evening thought → quote
 3. Keep it concise. Each section 1-3 sentences max.
 4. The "side note" or "evening thought" should be fresh and personal — check past briefings to avoid repeating themes.
+
+---
+
+## Voice Calls — calling Adam directly (Phase 1: dial + iMessage fallback)
+
+You can place an actual phone call to Adam through the HWM API. This is for
+moments where text isn't enough — you genuinely need a quick verbal answer.
+Phase 1 doesn't have a live voice bridge yet (so on pickup Adam hears a
+short placeholder and the call hangs up); the fallback iMessage carries
+your real question if he doesn't pick up.
+
+**When to call vs text vs iMessage:**
+
+- Text/iMessage: anything routine, anything async, anything that fits in writing.
+- Phone call: rare. Time-sensitive yes/no, ambiguity that text round-trips poorly,
+  or a moment where the user has *asked* you to call.
+
+**Quiet hours: 8am – 9pm America/New_York.** Outside that window the API
+returns 422 with `quiet_hours: true`. Don't retry until morning — send an
+iMessage instead.
+
+### Place a call
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $HWM_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Quick yes/no on the Etsy refund — buyer wants both items returned, $42 total. Approve?",
+    "fallback_text": "Tried calling about the Etsy refund: buyer wants both items returned ($42 total). Approve? Reply yes/no."
+  }' \
+  "$HWM_API_URL/calls"
+```
+
+- `prompt`: what *you* wanted to ask Adam. Short, specific, one question.
+- `fallback_text`: the iMessage that goes out if Adam doesn't pick up.
+  Make it standalone — Adam may read it without seeing the prompt.
+
+Response:
+```json
+{ "id": 17, "status": "queued", ... }
+```
+
+### Poll call status
+
+```bash
+curl -s -H "Authorization: Bearer $HWM_API_TOKEN" "$HWM_API_URL/calls/17"
+```
+
+Statuses: `queued` → `placing` → `ringing` → `answered` → `completed`,
+or terminal `no_answer` / `busy` / `failed` / `fallback_imessage`.
+The `fallback_imessage` status means the iMessage went out — you don't
+need to send another.
+
+### Recent calls
+
+```bash
+curl -s -H "Authorization: Bearer $HWM_API_TOKEN" "$HWM_API_URL/calls"
+```
 
 ## Important Notes
 
