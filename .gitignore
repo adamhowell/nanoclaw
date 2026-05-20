@@ -36,3 +36,8 @@ groups/global/*
 .nanoclaw/
 
 agents-sdk-docs
+
+# Timestamped backups written by env-rotation + script edits on the
+# Mini. They sometimes carry secrets — never commit them.
+*.bak
+*.bak.*
