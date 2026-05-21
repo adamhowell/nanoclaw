@@ -539,6 +539,12 @@ describe('router', () => {
 
     const newMg = getMessagingGroupByPlatform('test-inherit', 'platform-NEW');
     expect(newMg).toBeDefined();
+    // The new mg inherits the template's unknown_sender_policy too — not
+    // just the wirings. Without this, the cloned wirings would fire but
+    // the access gate would still block the message as "unknown sender"
+    // because the default policy is request_approval.
+    expect(newMg!.unknown_sender_policy).toBe('public');
+
     const newWirings = getMessagingGroupAgents(newMg!.id);
     expect(newWirings).toHaveLength(1);
     expect(newWirings[0].agent_group_id).toBe('ag-1');
