@@ -23,8 +23,10 @@ import { getAgentGroup } from './db/agent-groups.js';
 import { recordDroppedMessage } from './db/dropped-messages.js';
 import {
   createMessagingGroup,
+  createMessagingGroupAgent,
   getMessagingGroupAgents,
   getMessagingGroupWithAgentCount,
+  getMessagingGroupsByChannel,
 } from './db/messaging-groups.js';
 import { findSessionForAgent } from './db/sessions.js';
 import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
@@ -200,6 +202,49 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       platformId: event.platformId,
     });
     agentCount = 0;
+
+    // 1a-bis. Inherit wirings from a sibling messaging_group on the same
+    //         channel when the adapter opts in. Used by channels where the
+    //         transport itself is the authorization boundary (e.g. hwmapp,
+    //         whose per-conversation jids are all created by the bearer-
+    //         auth'd WebSocket owner). Other channels leave the new mg
+    //         agent-less and fall through to the channel-request gate
+    //         below for explicit approval.
+    if (adapter?.inheritWiringOnAutoCreate) {
+      const siblings = getMessagingGroupsByChannel(event.channelType).filter((s) => s.id !== mgId);
+      let templateWirings: MessagingGroupAgent[] = [];
+      for (const sibling of siblings) {
+        const wirings = getMessagingGroupAgents(sibling.id);
+        if (wirings.length > 0) {
+          templateWirings = wirings;
+          break;
+        }
+      }
+      if (templateWirings.length > 0) {
+        const wiringNow = new Date().toISOString();
+        for (const w of templateWirings) {
+          createMessagingGroupAgent({
+            id: `mga-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            messaging_group_id: mgId,
+            agent_group_id: w.agent_group_id,
+            session_mode: w.session_mode,
+            priority: w.priority,
+            engage_mode: w.engage_mode,
+            engage_pattern: w.engage_pattern,
+            sender_scope: w.sender_scope,
+            ignored_message_policy: w.ignored_message_policy,
+            created_at: wiringNow,
+          });
+        }
+        agentCount = templateWirings.length;
+        log.info('Inherited wiring for auto-created messaging group', {
+          messagingGroupId: mgId,
+          channelType: event.channelType,
+          platformId: event.platformId,
+          wiringsCloned: templateWirings.length,
+        });
+      }
+    }
   } else {
     mg = found.mg;
     agentCount = found.agentCount;

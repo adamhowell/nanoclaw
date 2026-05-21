@@ -464,6 +464,92 @@ describe('router', () => {
     expect(getMessagingGroupByPlatform('slack', 'C-MENTIONED')).toBeDefined();
   });
 
+  it('inherits wiring from a sibling mg when adapter opts into inheritWiringOnAutoCreate', async () => {
+    // Channels whose transport is the auth boundary (e.g. hwmapp's
+    // bearer-auth'd WebSocket) opt in to lazy auto-wiring: new platform_ids
+    // inherit the wiring template from an existing sibling mg so the agent
+    // engages on the first message without going through the channel-
+    // request approval gate.
+    //
+    // Uses an isolated channel name + template mg so this test doesn't
+    // pollute the discord registry that the sibling routing-metadata
+    // tests rely on.
+    const { registerChannelAdapter, initChannelAdapters } = await import('./channels/channel-registry.js');
+    const { routeInbound } = await import('./router.js');
+    const { getMessagingGroupByPlatform, getMessagingGroupAgents } = await import('./db/messaging-groups.js');
+
+    // Template mg on the new channel — the row whose wiring should be cloned.
+    createMessagingGroup({
+      id: 'mg-inherit-template',
+      channel_type: 'test-inherit',
+      platform_id: 'platform-template',
+      name: 'Template',
+      is_group: 0,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    createMessagingGroupAgent({
+      id: 'mga-inherit-template',
+      messaging_group_id: 'mg-inherit-template',
+      agent_group_id: 'ag-1',
+      engage_mode: 'pattern',
+      engage_pattern: '.',
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
+
+    registerChannelAdapter('test-inherit', {
+      factory: () => ({
+        name: 'test-inherit',
+        channelType: 'test-inherit',
+        supportsThreads: false,
+        inheritWiringOnAutoCreate: true,
+        async setup() {},
+        async teardown() {},
+        isConnected() {
+          return true;
+        },
+        async deliver() {
+          return undefined;
+        },
+      }),
+    });
+    await initChannelAdapters(() => ({
+      onInbound: () => {},
+      onInboundEvent: () => {},
+      onMetadata: () => {},
+      onAction: () => {},
+    }));
+
+    await routeInbound({
+      channelType: 'test-inherit',
+      platformId: 'platform-NEW',
+      threadId: null,
+      message: {
+        id: 'msg-new',
+        kind: 'chat',
+        content: JSON.stringify({ sender: 'User', text: 'hey' }),
+        timestamp: now(),
+        isMention: true,
+      },
+    });
+
+    const newMg = getMessagingGroupByPlatform('test-inherit', 'platform-NEW');
+    expect(newMg).toBeDefined();
+    const newWirings = getMessagingGroupAgents(newMg!.id);
+    expect(newWirings).toHaveLength(1);
+    expect(newWirings[0].agent_group_id).toBe('ag-1');
+    expect(newWirings[0].engage_mode).toBe('pattern');
+    expect(newWirings[0].engage_pattern).toBe('.');
+
+    // The cloned wiring made the agent engage — a session should exist
+    // for the new mg now, proving routing flowed past the approval gate.
+    expect(findSession(newMg!.id, null)).toBeDefined();
+  });
+
   it('should route multiple messages to the same session', async () => {
     const { routeInbound } = await import('./router.js');
 

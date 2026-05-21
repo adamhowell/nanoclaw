@@ -124,6 +124,24 @@ export interface ChannelAdapter {
    */
   supportsThreads: boolean;
 
+  /**
+   * When true, a newly-discovered platform_id on this channel inherits its
+   * wiring from any existing wired sibling messaging_group on the same
+   * channel. The router clones the sibling's `messaging_group_agents` rows
+   * (engage_mode / pattern / sender_scope / etc.) onto the new mg so it
+   * engages immediately without going through the channel-request approval
+   * gate.
+   *
+   * Set true ONLY for channels where channel-level auth is the
+   * authorization — i.e., every reachable platform_id is implicitly
+   * created by an authenticated owner (e.g. hwmapp, where each
+   * conversation jid originates from the bearer-auth'd WebSocket owner).
+   * Multi-tenant chat platforms (WhatsApp, Discord, etc.) where new
+   * groups can appear without owner consent MUST leave this unset and
+   * continue routing through `channelRequestGate`.
+   */
+  inheritWiringOnAutoCreate?: boolean;
+
   // Lifecycle
   setup(config: ChannelSetup): Promise<void>;
   teardown(): Promise<void>;

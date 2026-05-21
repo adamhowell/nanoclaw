@@ -233,6 +233,15 @@ function createAdapter(): HwmAppAdapter | null {
           id: `hwmapp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           kind: 'chat',
           timestamp: new Date().toISOString(),
+          // Every hwmapp user_message is a direct address to the agent —
+          // the chat surface is 1:1 between owner and agent, every
+          // conversation jid is created by the authenticated owner, and
+          // there is no background chatter to filter out. Setting
+          // isMention is what unblocks the router's auto-create path for
+          // new conversation jids — the router drops non-mention messages
+          // on unknown messaging_groups to keep the DB clean on platforms
+          // where the bot merely sits in a busy channel.
+          isMention: true,
           content: {
             text,
             sender: 'user',
@@ -303,6 +312,12 @@ function createAdapter(): HwmAppAdapter | null {
     name: 'hwmapp',
     channelType: CHANNEL_TYPE,
     supportsThreads: false,
+    // Per-conversation jids are created by the bearer-auth'd WebSocket
+    // owner — they're implicitly authorized. Let the router clone the
+    // channel's existing wiring onto new mgs instead of dropping them
+    // into the channel-request approval gate (which has no UI surface
+    // for hwm_app conversations anyway).
+    inheritWiringOnAutoCreate: true,
 
     async setup(c: ChannelSetup): Promise<void> {
       config = c;
