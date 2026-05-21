@@ -97,8 +97,12 @@ export interface Channel {
   syncGroups?(force: boolean): Promise<void>;
   // Optional: start a brand-new conversation on the platform and post an
   // opening assistant message into it. Implemented by channels whose platform
-  // supports agent-initiated conversations (currently: hwmapp).
-  startConversation?(title: string, content: string): Promise<void>;
+  // supports agent-initiated conversations (currently: hwm_app).
+  // sourceGroup is the requesting group folder — channels use it to attribute
+  // the resulting conversation_jid back to the agent that asked for it, so
+  // the host can bind that run’s Claude Code session to the new conversation
+  // (see "new_conversation session-bind" comment in index.ts).
+  startConversation?(title: string, content: string, sourceGroup: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

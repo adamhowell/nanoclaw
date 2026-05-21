@@ -25,7 +25,10 @@ export interface IpcDeps {
   onTasksChanged: () => void;
   // Start a brand-new conversation on the platform with an opening assistant
   // message. Resolves to no-op if no channel supports it (i.e. no HWM app).
-  startConversation: (title: string, content: string) => Promise<void>;
+  // sourceGroup is the requesting group's folder — used so the host can later
+  // bind the in-flight Claude Code session to the newly-created conversation,
+  // letting user follow-ups in that conversation resume with full context.
+  startConversation: (title: string, content: string, sourceGroup: string) => Promise<void>;
 }
 
 let ipcWatcherRunning = false;
@@ -440,7 +443,7 @@ export async function processTaskIpc(
         break;
       }
       if (data.title && data.content) {
-        await deps.startConversation(data.title, data.content);
+        await deps.startConversation(data.title, data.content, sourceGroup);
       } else {
         logger.warn(
           { data },

@@ -35,7 +35,11 @@ const HWM_TOKEN = process.env.ACCOMPLICE_TOKEN || envVars.ACCOMPLICE_TOKEN;
 type PendingResponses = Map<string, number>;
 
 /** Opening-message content waiting for a conversation_started confirmation */
-type PendingNewConversation = { title: string; content: string };
+type PendingNewConversation = {
+  title: string;
+  content: string;
+  sourceGroup: string;
+};
 
 class HwmAppChannel implements Channel {
   name = 'hwmapp';
@@ -46,6 +50,7 @@ class HwmAppChannel implements Channel {
   private identifier: string;
   private pendingResponses: PendingResponses = new Map();
   private pendingNewConversations: PendingNewConversation[] = [];
+  private onNewConversationCreated?: (sourceGroup: string, jid: string) => void;
 
   private onMessage: OnInboundMessage;
   private onChatMetadata: OnChatMetadata;
@@ -54,6 +59,7 @@ class HwmAppChannel implements Channel {
   constructor(opts: ChannelOpts) {
     this.onMessage = opts.onMessage;
     this.onChatMetadata = opts.onChatMetadata;
+    this.onNewConversationCreated = opts.onNewConversationCreated;
     this.registeredGroups = opts.registeredGroups;
     this.identifier = JSON.stringify({ channel: 'AgentRelayChannel' });
   }
@@ -251,6 +257,16 @@ class HwmAppChannel implements Channel {
           { jid, title },
           'HWM app: posted opening message into new conversation',
         );
+
+        // Hand the new conversation_jid back to the host attributed to the
+        // requesting group, so the host can bind this run's Claude Code
+        // session to it when the run completes. Without this, scheduled
+        // tasks that create a new conversation (e.g. daily Freshservice
+        // report) lose their session as soon as the task exits — and the
+        // user's follow-up reply in that conversation starts from scratch.
+        if (this.onNewConversationCreated && pending.sourceGroup) {
+          this.onNewConversationCreated(pending.sourceGroup, jid);
+        }
         break;
       }
 
@@ -259,7 +275,11 @@ class HwmAppChannel implements Channel {
     }
   }
 
-  async startConversation(title: string, content: string): Promise<void> {
+  async startConversation(
+    title: string,
+    content: string,
+    sourceGroup: string,
+  ): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       logger.warn(
         { title },
@@ -268,7 +288,7 @@ class HwmAppChannel implements Channel {
       return;
     }
 
-    this.pendingNewConversations.push({ title, content });
+    this.pendingNewConversations.push({ title, content, sourceGroup });
     this.sendAction('start_conversation', { title });
     logger.info({ title }, 'HWM app: requested new conversation');
   }

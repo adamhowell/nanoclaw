@@ -73,6 +73,17 @@ export interface SchedulerDependencies {
     groupFolder: string,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
+  // Persist a Claude Code session for a given key (typically
+  // `${group_folder}:${chat_jid}`) so the next user message in that
+  // conversation resumes it. Used at the end of a successful task run.
+  setSession: (key: string, sessionId: string) => void;
+  // Drain and return the list of conversation_jids that were created
+  // during the current run for this group (via the agent calling
+  // mcp__nanoclaw__new_conversation, confirmed by the platform's
+  // conversation_started reply). The scheduler binds the run's final
+  // session_id to each of these so user follow-ups in any of those
+  // brand-new conversations resume with the agent's full context.
+  consumeNewConversations: (groupFolder: string) => string[];
 }
 
 async function runTask(
@@ -208,6 +219,31 @@ async function runTask(
     } else if (output.result) {
       // Result was already forwarded to the user via the streaming callback above
       result = output.result;
+    }
+
+    // Bind this run's Claude Code session to every conversation it
+    // touched, so a user follow-up in any of them resumes with full
+    // context. Without this, scheduled tasks that drop content into a
+    // brand-new conversation (e.g. Rexcom's daily Freshservice report)
+    // lose their session the moment they exit — and the user's reply
+    // hours later starts from a cold container.
+    if (output.newSessionId && output.status !== 'error') {
+      const newJids = deps.consumeNewConversations(task.group_folder);
+      const targetJids = new Set<string>([task.chat_jid, ...newJids]);
+      for (const jid of targetJids) {
+        if (!jid) continue;
+        deps.setSession(`${task.group_folder}:${jid}`, output.newSessionId);
+      }
+      if (newJids.length > 0) {
+        logger.info(
+          {
+            taskId: task.id,
+            sessionId: output.newSessionId,
+            newConversationJids: newJids,
+          },
+          'Bound task session to newly-created conversations',
+        );
+      }
     }
 
     logger.info(

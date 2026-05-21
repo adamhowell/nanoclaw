@@ -74,6 +74,14 @@ export { escapeXml, formatMessages } from './router.js';
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
+// Buffers conversation_jids that the platform confirmed creating for each
+// requesting group's currently-running container. Drained at the end of
+// the run (scheduler via consumeNewConversations, runAgent inline) so the
+// run's Claude Code session_id can be bound to those new conversations.
+// Without this, scheduled tasks (and interactive turns) that spawn a new
+// conversation lose their session the moment they exit, and any user
+// follow-up starts from a cold container.
+const recentNewConvsByGroup: Map<string, string[]> = new Map();
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
@@ -453,6 +461,25 @@ async function runAgent(
     if (output.newSessionId && !finalIsError) {
       sessions[sessionKey] = output.newSessionId;
       setSession(sessionKey, output.newSessionId);
+      // Bind this turn's session to every conversation it created via
+      // mcp__nanoclaw__new_conversation. Mirrors the scheduler's
+      // post-run drain — if the agent spawned new conversations during
+      // an interactive turn, follow-ups in those conversations should
+      // resume with the agent's context too.
+      const newJids = recentNewConvsByGroup.get(group.folder) ?? [];
+      if (newJids.length > 0) {
+        recentNewConvsByGroup.delete(group.folder);
+        for (const jid of newJids) {
+          if (!jid) continue;
+          const k = `${group.folder}:${jid}`;
+          sessions[k] = output.newSessionId;
+          setSession(k, output.newSessionId);
+        }
+        logger.info(
+          { sessionId: output.newSessionId, newConversationJids: newJids },
+          'Bound interactive turn session to newly-created conversations',
+        );
+      }
     } else if (finalIsError) {
       delete sessions[sessionKey];
       setSession(sessionKey, '');
@@ -750,6 +777,15 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    onNewConversationCreated: (sourceGroup: string, jid: string) => {
+      // Channel confirms an agent-initiated conversation was created on
+      // the platform. Buffer it per source group so the scheduler (or
+      // runAgent) can bind this run's Claude Code session to the new jid
+      // when the run completes.
+      const existing = recentNewConvsByGroup.get(sourceGroup) ?? [];
+      existing.push(jid);
+      recentNewConvsByGroup.set(sourceGroup, existing);
+    },
   };
 
   // Create and connect all registered channels.
@@ -789,6 +825,15 @@ async function main(): Promise<void> {
       const text = formatOutbound(rawText);
       if (text) await channel.sendMessage(jid, text);
     },
+    setSession: (key, sessionId) => {
+      sessions[key] = sessionId;
+      setSession(key, sessionId);
+    },
+    consumeNewConversations: (groupFolder) => {
+      const list = recentNewConvsByGroup.get(groupFolder) ?? [];
+      recentNewConvsByGroup.delete(groupFolder);
+      return list;
+    },
   });
   startIpcWatcher({
     sendMessage: (jid, text) => {
@@ -824,14 +869,14 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
-    startConversation: async (title, content) => {
+    startConversation: async (title, content, sourceGroup) => {
       const channel = channels.find((ch) => ch.startConversation);
       if (!channel) {
         throw new Error(
           'No channel supports starting conversations (HWM app not connected)',
         );
       }
-      await channel.startConversation!(title, content);
+      await channel.startConversation!(title, content, sourceGroup);
     },
   });
   queue.setProcessMessagesFn(processGroupMessages);
