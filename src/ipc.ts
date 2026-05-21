@@ -28,7 +28,11 @@ export interface IpcDeps {
   // sourceGroup is the requesting group's folder — used so the host can later
   // bind the in-flight Claude Code session to the newly-created conversation,
   // letting user follow-ups in that conversation resume with full context.
-  startConversation: (title: string, content: string, sourceGroup: string) => Promise<void>;
+  startConversation: (
+    title: string,
+    content: string,
+    sourceGroup: string,
+  ) => Promise<void>;
 }
 
 let ipcWatcherRunning = false;

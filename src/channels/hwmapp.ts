@@ -72,8 +72,8 @@ type IncomingFile = {
   url: string;
 };
 
-class HwmChannel implements Channel {
-  name = 'hwm';
+class HwmAppChannel implements Channel {
+  name = 'hwmapp';
 
   private ws: WebSocket | null = null;
   private connected = false;
@@ -101,12 +101,12 @@ class HwmChannel implements Channel {
 
   private doConnect(): void {
     const url = `${HWM_RELAY_URL}?agent_token=${HWM_RELAY_TOKEN}`;
-    logger.info({ url: HWM_RELAY_URL }, 'hwm: connecting');
+    logger.info({ url: HWM_RELAY_URL }, 'hwmapp: connecting');
 
     this.ws = new WebSocket(url);
 
     this.ws.on('open', () => {
-      logger.info('hwm: WebSocket connected');
+      logger.info('hwmapp: WebSocket connected');
       // Subscribe to the relay channel (ActionCable protocol)
       this.ws!.send(
         JSON.stringify({
@@ -121,7 +121,7 @@ class HwmChannel implements Channel {
         const frame = JSON.parse(raw.toString());
         this.handleFrame(frame);
       } catch (err) {
-        logger.error({ err }, 'hwm: failed to parse frame');
+        logger.error({ err }, 'hwmapp: failed to parse frame');
       }
     });
 
@@ -129,13 +129,13 @@ class HwmChannel implements Channel {
       this.connected = false;
       logger.warn(
         { code },
-        `hwm: WebSocket closed, reconnecting in ${RECONNECT_DELAY / 1000}s`,
+        `hwmapp: WebSocket closed, reconnecting in ${RECONNECT_DELAY / 1000}s`,
       );
       this.scheduleReconnect();
     });
 
     this.ws.on('error', (err: Error) => {
-      logger.error({ err }, 'hwm: WebSocket error');
+      logger.error({ err }, 'hwmapp: WebSocket error');
     });
   }
 
@@ -150,12 +150,12 @@ class HwmChannel implements Channel {
 
     if (frame.type === 'confirm_subscription') {
       this.connected = true;
-      logger.info('hwm: subscribed to relay channel');
+      logger.info('hwmapp: subscribed to relay channel');
       return;
     }
 
     if (frame.type === 'reject_subscription') {
-      logger.error('hwm: subscription rejected — check HWM_RELAY_TOKEN');
+      logger.error('hwmapp: subscription rejected — check HWM_RELAY_TOKEN');
       return;
     }
 
@@ -163,12 +163,12 @@ class HwmChannel implements Channel {
     if (frame.message) {
       logger.info(
         { identifier: frame.identifier, expectedIdentifier: this.identifier },
-        'hwm: received data frame',
+        'hwmapp: received data frame',
       );
       // Fire and forget — handleMessage is async because it may fetch
       // attachments, but the WebSocket message handler is synchronous.
       this.handleMessage(frame.message).catch((err) => {
-        logger.error({ err }, 'hwm: handleMessage failed');
+        logger.error({ err }, 'hwmapp: handleMessage failed');
       });
     }
   }
@@ -219,7 +219,7 @@ class HwmChannel implements Channel {
           } catch (err) {
             logger.error(
               { err, jid, fileCount: files.length },
-              'hwm: attachment materialization failed; sending URLs as text',
+              'hwmapp: attachment materialization failed; sending URLs as text',
             );
             fileLines = files.map(
               (f) =>
@@ -237,7 +237,7 @@ class HwmChannel implements Channel {
         this.pendingResponses.set(jid, messageId);
 
         const newMsg: NewMessage = {
-          id: `hwm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          id: `hwmapp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           chat_jid: jid,
           sender: 'user',
           sender_name: 'User',
@@ -247,15 +247,27 @@ class HwmChannel implements Channel {
           is_bot_message: false,
         };
 
-        this.onChatMetadata(jid, new Date().toISOString(), 'hwm', 'hwm', false);
+        this.onChatMetadata(
+          jid,
+          new Date().toISOString(),
+          'hwmapp',
+          'hwmapp',
+          false,
+        );
         this.onMessage(jid, newMsg);
         break;
       }
 
       case 'new_conversation': {
         const jid = msg.conversation_jid as string;
-        const name = (msg.name as string) || 'hwm';
-        this.onChatMetadata(jid, new Date().toISOString(), name, 'hwm', false);
+        const name = (msg.name as string) || 'hwmapp';
+        this.onChatMetadata(
+          jid,
+          new Date().toISOString(),
+          name,
+          'hwmapp',
+          false,
+        );
         break;
       }
 
@@ -263,13 +275,19 @@ class HwmChannel implements Channel {
         // Response to an agent-initiated start_conversation action. Post the
         // queued opening message into the newly-created conversation.
         const jid = msg.conversation_jid as string;
-        const title = (msg.title as string) || 'hwm';
+        const title = (msg.title as string) || 'hwmapp';
         if (!jid) {
-          logger.warn({ msg }, 'hwm: conversation_started missing jid');
+          logger.warn({ msg }, 'hwmapp: conversation_started missing jid');
           break;
         }
 
-        this.onChatMetadata(jid, new Date().toISOString(), title, 'hwm', false);
+        this.onChatMetadata(
+          jid,
+          new Date().toISOString(),
+          title,
+          'hwmapp',
+          false,
+        );
 
         const pending =
           this.pendingNewConversations.find((p) => p.title === title) ||
@@ -277,7 +295,7 @@ class HwmChannel implements Channel {
         if (!pending) {
           logger.warn(
             { jid, title },
-            'hwm: conversation_started with no pending opener',
+            'hwmapp: conversation_started with no pending opener',
           );
           break;
         }
@@ -292,7 +310,7 @@ class HwmChannel implements Channel {
         });
         logger.info(
           { jid, title },
-          'hwm: posted opening message into new conversation',
+          'hwmapp: posted opening message into new conversation',
         );
 
         // Hand the new conversation_jid back to the host attributed to the
@@ -308,7 +326,7 @@ class HwmChannel implements Channel {
       }
 
       default:
-        logger.debug({ type: msg.type }, 'hwm: unknown message type');
+        logger.debug({ type: msg.type }, 'hwmapp: unknown message type');
     }
   }
 
@@ -318,18 +336,18 @@ class HwmChannel implements Channel {
     sourceGroup: string,
   ): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.warn({ title }, 'hwm: cannot start conversation — not connected');
+      logger.warn({ title }, 'hwmapp: cannot start conversation — not connected');
       return;
     }
 
     this.pendingNewConversations.push({ title, content, sourceGroup });
     this.sendAction('start_conversation', { title });
-    logger.info({ title, sourceGroup }, 'hwm: requested new conversation');
+    logger.info({ title, sourceGroup }, 'hwmapp: requested new conversation');
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.warn({ jid }, 'hwm: cannot send — not connected');
+      logger.warn({ jid }, 'hwmapp: cannot send — not connected');
       return;
     }
 
@@ -396,13 +414,13 @@ class HwmChannel implements Channel {
       } catch (err) {
         logger.warn(
           { err, jid, folder: group.folder },
-          'hwm: cannot resolve group folder for attachments',
+          'hwmapp: cannot resolve group folder for attachments',
         );
       }
     } else {
       logger.warn(
         { jid },
-        'hwm: no registered group for jid — sending attachment URLs raw',
+        'hwmapp: no registered group for jid — sending attachment URLs raw',
       );
     }
 
@@ -500,7 +518,7 @@ async function downloadAttachment(
   try {
     logger.info(
       { url: f.url, filename: f.filename },
-      'hwm: fetching attachment',
+      'hwmapp: fetching attachment',
     );
     const resp = await fetch(f.url, {
       signal: controller.signal,
@@ -509,7 +527,7 @@ async function downloadAttachment(
     if (!resp.ok) {
       logger.warn(
         { url: f.url, status: resp.status, filename: f.filename },
-        'hwm: attachment fetch returned non-2xx',
+        'hwmapp: attachment fetch returned non-2xx',
       );
       return null;
     }
@@ -517,7 +535,7 @@ async function downloadAttachment(
     if (buf.byteLength > MAX_ATTACHMENT_BYTES) {
       logger.warn(
         { filename: f.filename, bytes: buf.byteLength },
-        'hwm: attachment exceeds size cap, skipping',
+        'hwmapp: attachment exceeds size cap, skipping',
       );
       return null;
     }
@@ -525,7 +543,7 @@ async function downloadAttachment(
     fs.writeFileSync(hostPath, buf);
     logger.info(
       { filename: f.filename, bytes: buf.byteLength, containerPath },
-      'hwm: attachment materialized',
+      'hwmapp: attachment materialized',
     );
     return containerPath;
   } catch (err) {
@@ -537,8 +555,8 @@ async function downloadAttachment(
     logger.error(
       { err, url: f.url, filename: f.filename, isTimeout },
       isTimeout
-        ? 'hwm: attachment fetch timed out'
-        : 'hwm: attachment download failed',
+        ? 'hwmapp: attachment fetch timed out'
+        : 'hwmapp: attachment download failed',
     );
     return null;
   } finally {
@@ -559,12 +577,12 @@ function sanitizePathSegment(seg: string): string {
   return seg.replace(/[^A-Za-z0-9_.-]+/g, '_');
 }
 
-registerChannel('hwm', (opts: ChannelOpts) => {
+registerChannel('hwmapp', (opts: ChannelOpts) => {
   if (!HWM_RELAY_URL || !HWM_RELAY_TOKEN) {
     logger.info(
-      'hwm: skipping — HWM_RELAY_URL/HWM_RELAY_TOKEN (or legacy ACCOMPLICE_URL/ACCOMPLICE_TOKEN) not set',
+      'hwmapp: skipping — HWM_RELAY_URL/HWM_RELAY_TOKEN (or legacy ACCOMPLICE_URL/ACCOMPLICE_TOKEN) not set',
     );
     return null;
   }
-  return new HwmChannel(opts);
+  return new HwmAppChannel(opts);
 });
