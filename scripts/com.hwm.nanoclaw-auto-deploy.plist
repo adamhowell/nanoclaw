@@ -6,10 +6,10 @@
     <string>com.hwm.nanoclaw-auto-deploy</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/burnie/nanoclaw/scripts/auto-deploy.sh</string>
+        <string>/Users/burnie/nanoclaw-v2/scripts/auto-deploy.sh</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/burnie/nanoclaw</string>
+    <string>/Users/burnie/nanoclaw-v2</string>
     <key>RunAtLoad</key>
     <true/>
     <key>StartInterval</key>
@@ -22,8 +22,8 @@
         <string>/Users/burnie</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>/Users/burnie/nanoclaw/logs/auto-deploy.stdout.log</string>
+    <string>/Users/burnie/nanoclaw-v2/logs/auto-deploy.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/burnie/nanoclaw/logs/auto-deploy.stderr.log</string>
+    <string>/Users/burnie/nanoclaw-v2/logs/auto-deploy.stderr.log</string>
 </dict>
 </plist>

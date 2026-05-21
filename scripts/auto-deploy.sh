@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pull-build-restart cruise control for nanoclaw on Burnie's Mac mini.
+# Pull-build-restart cruise control for the nanoclaw host.
 #
 # Polls origin for new commits on the currently-checked-out branch.
 # When the local HEAD is behind origin, fast-forward, rebuild, and
@@ -14,13 +14,17 @@
 
 set -euo pipefail
 
-REPO_DIR="/Users/burnie/nanoclaw"
+# Resolve the repo root from the script's own location — keeps the
+# script portable across renames/moves and matches the launchd plist
+# that points ProgramArguments at <repo>/scripts/auto-deploy.sh.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$REPO_DIR/logs"
 LOG_FILE="$LOG_DIR/auto-deploy.log"
 # v2 slugs the launchd label per-install (com.nanoclaw-v2-<sha1>); derive
 # at runtime via the upstream helper so this script keeps working through
 # repo moves or copies.
 PROJECT_ROOT="$REPO_DIR"
+# shellcheck disable=SC1091
 source "$REPO_DIR/setup/lib/install-slug.sh"
 SERVICE=$(launchd_label)
 PNPM="/opt/homebrew/bin/pnpm"
@@ -56,10 +60,11 @@ if [ "$LOCAL" = "$REMOTE" ]; then
   exit 0
 fi
 
-# Determine whether package.json or the lockfile changed in the
-# incoming commits — if so we need npm install before build.
+# Determine whether package.json or the pnpm lockfile changed in the
+# incoming commits — if so we need pnpm install before build. v2 uses
+# pnpm-lock.yaml (not package-lock.json — that's the v1/npm artifact).
 DEP_CHANGED=0
-if $GIT diff --name-only "$LOCAL" "$REMOTE" | grep -qE "^(package\.json|package-lock\.json)$"; then
+if $GIT diff --name-only "$LOCAL" "$REMOTE" | grep -qE "^(package\.json|pnpm-lock\.yaml)$"; then
   DEP_CHANGED=1
 fi
 
