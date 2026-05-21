@@ -304,6 +304,16 @@ export class ClaudeProvider implements AgentProvider {
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user'],
         mcpServers: this.mcpServers,
+        // Pipe Claude Code's stderr into our log. Without this the SDK
+        // discards stderr (stdio:ignore), so a non-zero exit surfaces as
+        // an opaque "process exited with code N" with no clue why. The
+        // callback fires per chunk; we split on lines so each one is its
+        // own log entry.
+        stderr: (chunk: string) => {
+          for (const line of chunk.split('\n')) {
+            if (line.trim()) log(`[claude stderr] ${line}`);
+          }
+        },
         hooks: {
           PreToolUse: [{ hooks: [preToolUseHook] }],
           PostToolUse: [{ hooks: [postToolUseHook] }],
