@@ -1,3 +1,12 @@
+# Ensure Homebrew tools are on PATH even when invoked from
+# non-interactive shells (SSH-triggered git hooks, cron, launchd).
+# Login shells already have this via ~/.zprofile; this is for
+# everything else.
+for p in /opt/homebrew/bin /usr/local/bin; do
+  case ":$PATH:" in *":$p:"*) ;; *) [ -d "$p" ] && PATH="$p:$PATH" ;; esac
+done
+export PATH
+
 staged=$(git diff --cached --name-only --diff-filter=ACM -- 'src/**/*.ts')
 pnpm run format:fix
 if [ -n "$staged" ]; then
