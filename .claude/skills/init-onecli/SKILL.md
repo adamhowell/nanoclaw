@@ -140,14 +140,26 @@ onecli secrets create --name Anthropic --type anthropic --value <key> --host-pat
 onecli secrets create --name Anthropic --type anthropic --value <token> --host-pattern api.anthropic.com
 ```
 
-After successful migration, remove the credential lines from `.env`. Use the Edit tool to remove only the credential variable lines (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`). Keep all other `.env` entries intact (e.g. `ONECLI_URL`, `TELEGRAM_BOT_TOKEN`, channel tokens).
+**Leave the Anthropic credential lines in `.env` for now.** The host's
+credential proxy (`src/credential-proxy.ts`) still reads the OAuth token
+and API key directly from `.env` via `readEnvFile()` — it does NOT yet
+consult OneCLI for the Anthropic request path. Removing them from `.env`
+breaks the proxy: it boots with `authMode="oauth"` but no token to
+inject, every container call to `api.anthropic.com` 401s, and Claude
+Code exits code 1.
+
+Registering in OneCLI now is still worth doing — it lets the dashboard
+audit usage, prepares for the future credential-proxy-via-OneCLI work,
+and surfaces the credential in the same place as channel/integration
+tokens. Just don't delete the `.env` copy until `credential-proxy.ts`
+gets refactored to fetch from OneCLI.
 
 Verify the secret was registered:
 ```bash
 onecli secrets list
 ```
 
-Tell the user: "Migrated your Anthropic credentials from `.env` to the OneCLI Agent Vault. The raw keys have been removed from `.env` — they're now managed by OneCLI and will be injected at request time without entering containers."
+Tell the user: "Registered your Anthropic credentials in the OneCLI Agent Vault. Kept them in `.env` too — v2's credential proxy reads from `.env` directly today, so removing them would break container API calls. Once the proxy is refactored to fetch from OneCLI, we'll drop the `.env` copy."
 
 ### Offer to migrate other container-facing credentials
 
@@ -177,7 +189,7 @@ onecli secrets create --name <SecretName> --type api_key --value <value> --host-
 
 If there are credential variables not in the table above that look container-facing (i.e. not a channel token), ask the user: "Is `<VARIABLE_NAME>` used by agents inside containers? If so, what API host does it authenticate against? (e.g., `api.example.com`)" — then migrate accordingly.
 
-After migration, remove the migrated lines from `.env` using the Edit tool. Keep channel tokens and any credentials the user chose not to migrate.
+After migration, the same caveat as Anthropic applies: **leave the lines in `.env` until any code path that reads them (whether the host or a container skill) gets a refactor that fetches from OneCLI.** Registering in the vault now is preparatory. Removing prematurely breaks whichever code path still expects the value in `.env`.
 
 Verify all secrets were registered:
 ```bash
@@ -301,8 +313,8 @@ If an agent uses `git` or `gh`, add to `data/v2-sessions/<agent-group-id>/.claud
 
 **"OneCLI gateway not reachable" in logs:** The gateway isn't running. Check with `curl -sf ${ONECLI_URL}/health`. Start it with `onecli start` if needed.
 
-**Container gets no credentials:** Verify `ONECLI_URL` is set in `.env` and the gateway has an Anthropic secret (`onecli secrets list`).
+**Container gets no credentials:** Verify `ONECLI_URL` is set in `.env` and the gateway has an Anthropic secret (`onecli secrets list`). Also verify the Anthropic credential is STILL in `.env` (this skill intentionally leaves it there — the host's credential proxy at `src/credential-proxy.ts` reads from `.env`, not OneCLI).
 
-**Old .env credentials still present:** This skill should have removed them. Double-check `.env` for `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_AUTH_TOKEN` and remove them manually if still present.
+**Credential proxy boots in oauth mode but returns 401:** Check that `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) is still present in `.env`. The proxy reads it at startup via `readEnvFile()`; if it's missing, the proxy boots happily but can't inject the auth header, so every container call to Anthropic gets a 401.
 
 **Port 10254 already in use:** Another OneCLI instance may be running. Check with `lsof -i :10254` and kill the old process, or configure a different port.
