@@ -318,6 +318,13 @@ function createAdapter(): HwmAppAdapter | null {
     // into the channel-request approval gate (which has no UI surface
     // for hwm_app conversations anyway).
     inheritWiringOnAutoCreate: true,
+    // Every hwmapp conversation jid is "the same user on a different
+    // thread" — so a channel destination like `accomplice` ("the user")
+    // must resolve to the SESSION'S mg at reply time, not the destination
+    // row's static target. Otherwise replies always go to whichever jid
+    // the destination was originally pointed at, regardless of which
+    // conversation the inbound came from.
+    channelDestinationsAreSessionScoped: true,
 
     async setup(c: ChannelSetup): Promise<void> {
       config = c;

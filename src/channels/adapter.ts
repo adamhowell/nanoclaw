@@ -142,6 +142,26 @@ export interface ChannelAdapter {
    */
   inheritWiringOnAutoCreate?: boolean;
 
+  /**
+   * When true, channel-typed `agent_destinations` rows on this channel
+   * resolve their platform_id from the SESSION'S messaging_group at
+   * projection time (`writeDestinations`), not from the destination row's
+   * static `target_id`. The destination row's mg is treated as a template
+   * for `(channel_type, name)`; the session's own mg supplies the actual
+   * platform_id.
+   *
+   * Use for channels where one logical "destination" (e.g. `accomplice` =
+   * "the user") spans many per-conversation platform_ids and replies must
+   * stay in the conversation that originated the inbound message — hwmapp
+   * is the canonical example.
+   *
+   * Leave unset on channels where destinations point at specific concrete
+   * targets that should NOT be remapped per-session (e.g. a Discord
+   * `#general` destination — the agent posts there because that's the
+   * named target, not because the session happens to be on Discord).
+   */
+  channelDestinationsAreSessionScoped?: boolean;
+
   // Lifecycle
   setup(config: ChannelSetup): Promise<void>;
   teardown(): Promise<void>;

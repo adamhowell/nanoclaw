@@ -6,11 +6,22 @@
  * Core container-runner calls this via a dynamic import guarded by a
  * `hasTable('agent_destinations')` check — without the agent-to-agent module
  * installed, the central table doesn't exist and the projection is skipped.
+ *
+ * For channel-typed destinations on channels with
+ * `channelDestinationsAreSessionScoped: true` (e.g. hwmapp), the session's
+ * own messaging_group supplies the platform_id instead of the destination
+ * row's static `target_id`. The destination row is treated as a template
+ * for `(channel_type, name)` — the session decides which conversation the
+ * reply lands in. This keeps replies in the originating conversation on
+ * platforms where one logical destination ("the user") spans many
+ * per-conversation platform_ids.
  */
 import fs from 'fs';
 
+import { getChannelAdapter } from '../../channels/channel-registry.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
 import { getMessagingGroup } from '../../db/messaging-groups.js';
+import { getSession } from '../../db/sessions.js';
 import { replaceDestinations, type DestinationRow } from '../../db/session-db.js';
 import { log } from '../../log.js';
 import { inboundDbPath, openInboundDb } from '../../session-manager.js';
@@ -20,6 +31,11 @@ export function writeDestinations(agentGroupId: string, sessionId: string): void
   const dbPath = inboundDbPath(agentGroupId, sessionId);
   if (!fs.existsSync(dbPath)) return;
 
+  // Session's own messaging_group — used to override channel-destination
+  // platform_ids on session-scoped channels (see header comment).
+  const session = getSession(sessionId);
+  const sessionMg = session?.messaging_group_id ? getMessagingGroup(session.messaging_group_id) : undefined;
+
   const rows = getDestinations(agentGroupId);
   const resolved: DestinationRow[] = [];
 
@@ -27,12 +43,24 @@ export function writeDestinations(agentGroupId: string, sessionId: string): void
     if (row.target_type === 'channel') {
       const mg = getMessagingGroup(row.target_id);
       if (!mg) continue;
+
+      // Pick the platform_id the agent's reply will hit. On channels where
+      // every conversation has its own platform_id and `accomplice` means
+      // "the user, in this conversation," the session's mg is the right
+      // target. Other channels keep the destination's static target.
+      const adapter = getChannelAdapter(mg.channel_type);
+      const sessionScoped =
+        adapter?.channelDestinationsAreSessionScoped === true &&
+        sessionMg !== undefined &&
+        sessionMg.channel_type === mg.channel_type;
+      const effectiveMg = sessionScoped ? sessionMg : mg;
+
       resolved.push({
         name: row.local_name,
         display_name: mg.name ?? row.local_name,
         type: 'channel',
-        channel_type: mg.channel_type,
-        platform_id: mg.platform_id,
+        channel_type: effectiveMg.channel_type,
+        platform_id: effectiveMg.platform_id,
         agent_group_id: null,
       });
     } else if (row.target_type === 'agent') {
