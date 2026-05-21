@@ -57,78 +57,64 @@ describe('stopContainer', () => {
 });
 
 // --- ensureContainerRuntimeRunning ---
+//
+// Default runtime is docker (CONTAINER_RUNTIME_BIN). Docker's health check
+// is `docker info`; there is no in-CLI start command — the daemon comes up
+// via the OS service manager (Colima, Docker Desktop, systemd). The
+// Apple-Container-specific `system status` / `system start` semantics are
+// covered by a separate describe block below.
 
-describe('ensureContainerRuntimeRunning', () => {
-  it('does nothing when runtime is already running', () => {
-    mockExecSync.mockReturnValueOnce('');
+describe('ensureContainerRuntimeRunning (docker default)', () => {
+  it('does nothing when daemon responds to info', () => {
+    mockExecSync.mockReturnValueOnce('27.0.1\n');
 
     ensureContainerRuntimeRunning();
 
     expect(mockExecSync).toHaveBeenCalledTimes(1);
-    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} system status`, {
-      stdio: 'pipe',
-      timeout: 10000,
-    });
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} info --format '{{.ServerVersion}}'`,
+      { stdio: 'pipe', timeout: 10000 },
+    );
     expect(log.debug).toHaveBeenCalledWith('Container runtime already running');
   });
 
-  it('auto-starts when system status fails', () => {
-    // First call (system status) fails
-    mockExecSync.mockImplementationOnce(() => {
-      throw new Error('not running');
-    });
-    // Second call (system start) succeeds
-    mockExecSync.mockReturnValueOnce('');
-
-    ensureContainerRuntimeRunning();
-
-    expect(mockExecSync).toHaveBeenCalledTimes(2);
-    expect(mockExecSync).toHaveBeenNthCalledWith(2, `${CONTAINER_RUNTIME_BIN} system start`, {
-      stdio: 'pipe',
-      timeout: 30000,
-    });
-    expect(log.info).toHaveBeenCalledWith('Container runtime started');
-  });
-
-  it('throws when both status and start fail', () => {
+  it('throws when info fails — no in-CLI start to fall back to', () => {
     mockExecSync.mockImplementation(() => {
-      throw new Error('failed');
+      throw new Error('Cannot connect to the Docker daemon');
     });
 
     expect(() => ensureContainerRuntimeRunning()).toThrow('Container runtime is required but failed to start');
+    // Docker path makes exactly one execSync call (info) and then throws,
+    // unlike Apple Container which tries `system start` second.
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(log.error).toHaveBeenCalled();
   });
 });
 
 // --- cleanupOrphans ---
+//
+// Docker default: server-side label filter via `ps -q --filter label=...`.
+// Apple Container has no equivalent and uses a JSON-list-and-grep fallback;
+// that branch is exercised via the env-override block below.
 
-describe('cleanupOrphans', () => {
-  it('lists containers as JSON (Apple Container has no --filter label support)', () => {
-    mockExecSync.mockReturnValueOnce('[]');
+describe('cleanupOrphans (docker default)', () => {
+  const expectedListCmd = `${CONTAINER_RUNTIME_BIN} ps -q --filter status=running --filter label=${CONTAINER_INSTALL_LABEL}`;
+
+  it('uses docker ps -q with label filter', () => {
+    mockExecSync.mockReturnValueOnce('');
 
     cleanupOrphans();
 
-    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} ls --format json`, expect.any(Object));
+    expect(mockExecSync).toHaveBeenCalledWith(expectedListCmd, expect.any(Object));
   });
 
-  it('stops orphaned nanoclaw containers from JSON output (matching this install label)', () => {
-    const labels = { [CONTAINER_INSTALL_LABEL.split('=')[0]]: CONTAINER_INSTALL_LABEL.split('=')[1] };
-    // Apple Container ls returns JSON
-    const lsOutput = JSON.stringify([
-      { status: 'running', configuration: { id: 'nanoclaw-group1-111', labels } },
-      { status: 'stopped', configuration: { id: 'nanoclaw-group2-222', labels } },
-      { status: 'running', configuration: { id: 'nanoclaw-group3-333', labels } },
-      { status: 'running', configuration: { id: 'other-container', labels } },
-      // Peer install — different label, must NOT be reaped
-      { status: 'running', configuration: { id: 'nanoclaw-peer-444', labels: { 'nanoclaw-install': 'other' } } },
-    ]);
-    mockExecSync.mockReturnValueOnce(lsOutput);
+  it('stops every container ID returned', () => {
+    mockExecSync.mockReturnValueOnce('nanoclaw-group1-111\nnanoclaw-group3-333\n');
     // stop calls succeed
     mockExecSync.mockReturnValue('');
 
     cleanupOrphans();
 
-    // ls + 2 stop calls (only running nanoclaw- containers with our label)
     expect(mockExecSync).toHaveBeenCalledTimes(3);
     expect(mockExecSync).toHaveBeenNthCalledWith(2, `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group1-111`, {
       stdio: 'pipe',
@@ -142,8 +128,8 @@ describe('cleanupOrphans', () => {
     });
   });
 
-  it('does nothing when no orphans exist', () => {
-    mockExecSync.mockReturnValueOnce('[]');
+  it('does nothing when ps returns empty', () => {
+    mockExecSync.mockReturnValueOnce('');
 
     cleanupOrphans();
 
@@ -151,9 +137,9 @@ describe('cleanupOrphans', () => {
     expect(log.info).not.toHaveBeenCalled();
   });
 
-  it('warns and continues when ls fails', () => {
+  it('warns and continues when ps fails', () => {
     mockExecSync.mockImplementationOnce(() => {
-      throw new Error('container not available');
+      throw new Error('docker daemon not available');
     });
 
     cleanupOrphans(); // should not throw
@@ -165,12 +151,7 @@ describe('cleanupOrphans', () => {
   });
 
   it('continues stopping remaining containers when one stop fails', () => {
-    const labels = { [CONTAINER_INSTALL_LABEL.split('=')[0]]: CONTAINER_INSTALL_LABEL.split('=')[1] };
-    const lsOutput = JSON.stringify([
-      { status: 'running', configuration: { id: 'nanoclaw-a-1', labels } },
-      { status: 'running', configuration: { id: 'nanoclaw-b-2', labels } },
-    ]);
-    mockExecSync.mockReturnValueOnce(lsOutput);
+    mockExecSync.mockReturnValueOnce('nanoclaw-a-1\nnanoclaw-b-2\n');
     // First stop fails
     mockExecSync.mockImplementationOnce(() => {
       throw new Error('already stopped');
