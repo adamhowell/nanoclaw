@@ -129,15 +129,20 @@ COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # ---- Workspace + permissions -------------------------------------------------
-RUN mkdir -p /workspace/group /workspace/extra && \
+# v2 mount layout uses /workspace (session root) + /workspace/agent (group dir).
+# Pre-create both so they exist as mount targets, plus /workspace/extra for
+# additional mounts.
+RUN mkdir -p /workspace /workspace/agent /workspace/extra && \
     chown -R node:node /workspace && \
     chmod 777 /home/node
 
-# NOTE: deliberately NOT setting `USER node` here. The entrypoint must run
-# as root so it can `mount --bind /dev/null /workspace/project/.env` (Apple
-# Container has no file-mount support). Privileges are dropped to
-# RUN_UID/RUN_GID via `setpriv` inside entrypoint.sh after the mount.
-WORKDIR /workspace/group
+# NOTE: deliberately NOT setting `USER node` here. The container starts as
+# root so the entrypoint can do any root-only setup (e.g. restoring
+# .claude.json into /home/node before chowning it back). Privileges are
+# dropped to RUN_UID/RUN_GID via `setpriv` inside entrypoint.sh — required
+# because Claude Code's `--dangerously-skip-permissions` refuses to run
+# when EUID=0.
+WORKDIR /workspace/agent
 
 # tini is PID 1, reaps zombies, forwards signals cleanly. entrypoint.sh does
 # `exec bun ...` so bun runs as tini's direct child.

@@ -9,8 +9,30 @@
 # post-mortem inspection if the container exits unexpectedly, then exec bun
 # so that bun becomes PID 1's direct child (under tini) and receives signals.
 
+# Restore .claude.json from the most recent backup. Claude expects this
+# config at $HOME/.claude.json, but the SDK's automatic backups live in
+# /home/node/.claude/backups/. We only mount the .claude/ subtree (so
+# session/auth state persists across spawns) — $HOME/.claude.json itself
+# is per-container and won't survive recreation. Re-materialize it from
+# the newest backup on each spawn.
+LATEST_BACKUP=$(ls -t /home/node/.claude/backups/.claude.json.backup.* 2>/dev/null | head -1)
+if [ -n "$LATEST_BACKUP" ] && [ ! -f /home/node/.claude.json ]; then
+  cp "$LATEST_BACKUP" /home/node/.claude.json
+  chown node:node /home/node/.claude.json
+fi
+
 set -e
 
 cat > /tmp/input.json
 
-exec bun run /app/src/index.ts < /tmp/input.json
+# Drop to non-root so Claude Code accepts --dangerously-skip-permissions
+# (the CLI refuses that flag when EUID=0). Root-only setup (the .claude.json
+# restore above) is done; nothing else needs root.
+if [ "$(id -u)" = "0" ]; then
+  RUN_UID="${RUN_UID:-1000}"
+  RUN_GID="${RUN_GID:-1000}"
+  exec setpriv --reuid="$RUN_UID" --regid="$RUN_GID" --clear-groups -- \
+    bun run /app/src/index.ts < /tmp/input.json
+else
+  exec bun run /app/src/index.ts < /tmp/input.json
+fi
