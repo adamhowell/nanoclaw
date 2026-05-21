@@ -102,7 +102,11 @@ export interface Channel {
   // the resulting conversation_jid back to the agent that asked for it, so
   // the host can bind that run’s Claude Code session to the new conversation
   // (see "new_conversation session-bind" comment in index.ts).
-  startConversation?(title: string, content: string, sourceGroup: string): Promise<void>;
+  startConversation?(
+    title: string,
+    content: string,
+    sourceGroup: string,
+  ): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

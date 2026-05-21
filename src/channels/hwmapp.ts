@@ -1,14 +1,27 @@
 /**
- * HWM app channel for NanoClaw.
+ * hwm_app relay channel for NanoClaw.
  *
- * Connects outbound to app.hardworkmontage.com via WebSocket (ActionCable
- * protocol). Receives user messages from the HWM web UI, delivers them to
- * the agent, and streams responses back through the relay.
+ * Connects outbound to hwm_app's AgentRelayChannel over WebSocket
+ * (ActionCable protocol). Receives user messages from the web UI,
+ * delivers them to the agent, and streams responses back through
+ * the relay.
+ *
+ * Historical naming: this channel used to talk to a standalone
+ * "accomplice" service. The deploy-platform was merged into hwm_app
+ * in April 2026. Env var names (HWM_RELAY_*) are the current path;
+ * ACCOMPLICE_* are read as fallback so existing .env files on
+ * deployed Mac minis keep working. The JID prefix `accomplice:` is
+ * preserved on purpose — hwm_app's Conversation model still mints
+ * JIDs with that prefix for back-compat with rows already in its DB.
  */
+
+import fs from 'fs';
+import path from 'path';
 
 import WebSocket from 'ws';
 
 import { readEnvFile } from '../env.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import {
   Channel,
@@ -20,25 +33,43 @@ import {
 
 import { ChannelOpts, registerChannel } from './registry.js';
 
-// Kept as `accomplice:` to preserve compatibility with existing chat_jids in
-// messages.db and the routing in router.ts findChannel(). Renaming would
-// require migrating every stored chat_jid.
 const JID_PREFIX = 'accomplice:';
 const RECONNECT_DELAY = 5000;
 
-// Env var names kept for compatibility with existing .env files.
-const envVars = readEnvFile(['ACCOMPLICE_URL', 'ACCOMPLICE_TOKEN']);
-const HWM_URL = process.env.ACCOMPLICE_URL || envVars.ACCOMPLICE_URL;
-const HWM_TOKEN = process.env.ACCOMPLICE_TOKEN || envVars.ACCOMPLICE_TOKEN;
+const envVars = readEnvFile([
+  'HWM_RELAY_URL',
+  'HWM_RELAY_TOKEN',
+  'ACCOMPLICE_URL',
+  'ACCOMPLICE_TOKEN',
+]);
+const HWM_RELAY_URL =
+  process.env.HWM_RELAY_URL ||
+  envVars.HWM_RELAY_URL ||
+  process.env.ACCOMPLICE_URL ||
+  envVars.ACCOMPLICE_URL;
+const HWM_RELAY_TOKEN =
+  process.env.HWM_RELAY_TOKEN ||
+  envVars.HWM_RELAY_TOKEN ||
+  process.env.ACCOMPLICE_TOKEN ||
+  envVars.ACCOMPLICE_TOKEN;
 
-/** Maps conversation JID -> pending assistant message ID on the HWM side */
+/** Maps conversation JID -> pending assistant message ID on the hwm_app side */
 type PendingResponses = Map<string, number>;
 
-/** Opening-message content waiting for a conversation_started confirmation */
+/** Opening-message content waiting for a conversation_started confirmation.
+ *  sourceGroup is the requesting group's folder, captured so the host can
+ *  attribute the resulting conversation_jid back to the right run when
+ *  conversation_started lands. */
 type PendingNewConversation = {
   title: string;
   content: string;
   sourceGroup: string;
+};
+
+type IncomingFile = {
+  filename: string;
+  content_type: string;
+  url: string;
 };
 
 class HwmAppChannel implements Channel {
@@ -50,17 +81,17 @@ class HwmAppChannel implements Channel {
   private identifier: string;
   private pendingResponses: PendingResponses = new Map();
   private pendingNewConversations: PendingNewConversation[] = [];
-  private onNewConversationCreated?: (sourceGroup: string, jid: string) => void;
 
   private onMessage: OnInboundMessage;
   private onChatMetadata: OnChatMetadata;
   private registeredGroups: () => Record<string, RegisteredGroup>;
+  private onNewConversationCreated?: (sourceGroup: string, jid: string) => void;
 
   constructor(opts: ChannelOpts) {
     this.onMessage = opts.onMessage;
     this.onChatMetadata = opts.onChatMetadata;
-    this.onNewConversationCreated = opts.onNewConversationCreated;
     this.registeredGroups = opts.registeredGroups;
+    this.onNewConversationCreated = opts.onNewConversationCreated;
     this.identifier = JSON.stringify({ channel: 'AgentRelayChannel' });
   }
 
@@ -69,13 +100,13 @@ class HwmAppChannel implements Channel {
   }
 
   private doConnect(): void {
-    const url = `${HWM_URL}?agent_token=${HWM_TOKEN}`;
-    logger.info({ url: HWM_URL }, 'HWM app: connecting');
+    const url = `${HWM_RELAY_URL}?agent_token=${HWM_RELAY_TOKEN}`;
+    logger.info({ url: HWM_RELAY_URL }, 'hwmapp: connecting');
 
     this.ws = new WebSocket(url);
 
     this.ws.on('open', () => {
-      logger.info('HWM app: WebSocket connected');
+      logger.info('hwmapp: WebSocket connected');
       // Subscribe to the relay channel (ActionCable protocol)
       this.ws!.send(
         JSON.stringify({
@@ -90,22 +121,21 @@ class HwmAppChannel implements Channel {
         const frame = JSON.parse(raw.toString());
         this.handleFrame(frame);
       } catch (err) {
-        logger.error({ err }, 'HWM app: failed to parse frame');
+        logger.error({ err }, 'hwmapp: failed to parse frame');
       }
     });
 
     this.ws.on('close', (code: number) => {
-      const wasConnected = this.connected;
       this.connected = false;
       logger.warn(
         { code },
-        `HWM app: WebSocket closed, reconnecting in ${RECONNECT_DELAY / 1000}s`,
+        `hwmapp: WebSocket closed, reconnecting in ${RECONNECT_DELAY / 1000}s`,
       );
       this.scheduleReconnect();
     });
 
     this.ws.on('error', (err: Error) => {
-      logger.error({ err }, 'HWM app: WebSocket error');
+      logger.error({ err }, 'hwmapp: WebSocket error');
     });
   }
 
@@ -120,33 +150,37 @@ class HwmAppChannel implements Channel {
 
     if (frame.type === 'confirm_subscription') {
       this.connected = true;
-      logger.info('HWM app: subscribed to relay channel');
+      logger.info('hwmapp: subscribed to relay channel');
       return;
     }
 
     if (frame.type === 'reject_subscription') {
-      logger.error('HWM app: subscription rejected — check ACCOMPLICE_TOKEN');
+      logger.error('hwmapp: subscription rejected — check HWM_RELAY_TOKEN');
       return;
     }
 
-    // Data message from HWM
+    // Data message from hwm_app
     if (frame.message) {
       logger.info(
         { identifier: frame.identifier, expectedIdentifier: this.identifier },
-        'HWM app: received data frame',
+        'hwmapp: received data frame',
       );
-      this.handleMessage(frame.message);
+      // Fire and forget — handleMessage is async because it may fetch
+      // attachments, but the WebSocket message handler is synchronous.
+      this.handleMessage(frame.message).catch((err) => {
+        logger.error({ err }, 'hwmapp: handleMessage failed');
+      });
     }
   }
 
-  private handleMessage(msg: Record<string, unknown>): void {
+  private async handleMessage(msg: Record<string, unknown>): Promise<void> {
     switch (msg.type) {
       case 'user_message': {
         const jid = msg.conversation_jid as string;
         const messageId = msg.message_id as number;
         let content = msg.content as string;
 
-        // Page context — hwm_app now sends the path + title of the page the
+        // Page context — hwm_app sends the path + title of the page the
         // user was on when they hit send, so prompts like "summarize the
         // email I'm looking at" can be resolved without pasting a URL.
         // Optional — older clients / scheduled-task runs don't include it.
@@ -165,24 +199,45 @@ class HwmAppChannel implements Channel {
           content = content ? `${hint}\n${content}` : hint;
         }
 
-        // Append file URLs to message content so the agent can see them
-        const files = msg.files as
-          | Array<{ filename: string; content_type: string; url: string }>
-          | undefined;
+        // Attachments: download each file into the group's working dir so
+        // Claude Code's Read tool can actually see image/PDF bytes. The
+        // CLI can't fetch URLs as image content — it only reads local
+        // files. Falls back to the raw URL if the group isn't registered
+        // yet or the download fails, so something useful still reaches
+        // the agent. The whole step is wrapped in a hard timeout — if
+        // anything in here hangs, the user message MUST still reach
+        // Claude with at least the URL line.
+        const files = msg.files as IncomingFile[] | undefined;
         if (files && files.length > 0) {
-          const fileList = files
-            .map(
-              (f) => `[Attached: ${f.filename} (${f.content_type}) — ${f.url}]`,
-            )
-            .join('\n');
-          content = content ? `${content}\n\n${fileList}` : fileList;
+          let fileLines: string[];
+          try {
+            fileLines = await withTimeout(
+              this.materializeAttachments(jid, files),
+              ATTACHMENT_TOTAL_TIMEOUT_MS,
+              'materializeAttachments',
+            );
+          } catch (err) {
+            logger.error(
+              { err, jid, fileCount: files.length },
+              'hwmapp: attachment materialization failed; sending URLs as text',
+            );
+            fileLines = files.map(
+              (f) =>
+                `[Attached: ${f.filename} (${f.content_type}) — could not be downloaded; URL: ${f.url}]`,
+            );
+          }
+          if (fileLines.length > 0) {
+            content = content
+              ? `${content}\n\n${fileLines.join('\n')}`
+              : fileLines.join('\n');
+          }
         }
 
         // Track pending response so we can route sendMessage back
         this.pendingResponses.set(jid, messageId);
 
         const newMsg: NewMessage = {
-          id: `acc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          id: `hwmapp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           chat_jid: jid,
           sender: 'user',
           sender_name: 'User',
@@ -195,7 +250,7 @@ class HwmAppChannel implements Channel {
         this.onChatMetadata(
           jid,
           new Date().toISOString(),
-          'HWM App',
+          'hwmapp',
           'hwmapp',
           false,
         );
@@ -205,7 +260,7 @@ class HwmAppChannel implements Channel {
 
       case 'new_conversation': {
         const jid = msg.conversation_jid as string;
-        const name = (msg.name as string) || 'HWM App';
+        const name = (msg.name as string) || 'hwmapp';
         this.onChatMetadata(
           jid,
           new Date().toISOString(),
@@ -220,9 +275,9 @@ class HwmAppChannel implements Channel {
         // Response to an agent-initiated start_conversation action. Post the
         // queued opening message into the newly-created conversation.
         const jid = msg.conversation_jid as string;
-        const title = (msg.title as string) || 'HWM App';
+        const title = (msg.title as string) || 'hwmapp';
         if (!jid) {
-          logger.warn({ msg }, 'HWM app: conversation_started missing jid');
+          logger.warn({ msg }, 'hwmapp: conversation_started missing jid');
           break;
         }
 
@@ -240,7 +295,7 @@ class HwmAppChannel implements Channel {
         if (!pending) {
           logger.warn(
             { jid, title },
-            'HWM app: conversation_started with no pending opener',
+            'hwmapp: conversation_started with no pending opener',
           );
           break;
         }
@@ -255,7 +310,7 @@ class HwmAppChannel implements Channel {
         });
         logger.info(
           { jid, title },
-          'HWM app: posted opening message into new conversation',
+          'hwmapp: posted opening message into new conversation',
         );
 
         // Hand the new conversation_jid back to the host attributed to the
@@ -271,7 +326,7 @@ class HwmAppChannel implements Channel {
       }
 
       default:
-        logger.debug({ type: msg.type }, 'HWM app: unknown message type');
+        logger.debug({ type: msg.type }, 'hwmapp: unknown message type');
     }
   }
 
@@ -281,21 +336,18 @@ class HwmAppChannel implements Channel {
     sourceGroup: string,
   ): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.warn(
-        { title },
-        'HWM app: cannot start conversation — not connected',
-      );
+      logger.warn({ title }, 'hwmapp: cannot start conversation — not connected');
       return;
     }
 
     this.pendingNewConversations.push({ title, content, sourceGroup });
     this.sendAction('start_conversation', { title });
-    logger.info({ title }, 'HWM app: requested new conversation');
+    logger.info({ title, sourceGroup }, 'hwmapp: requested new conversation');
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.warn({ jid }, 'HWM app: cannot send — not connected');
+      logger.warn({ jid }, 'hwmapp: cannot send — not connected');
       return;
     }
 
@@ -342,16 +394,56 @@ class HwmAppChannel implements Channel {
     });
   }
 
-  async sendStatusUpdate(jid: string, text: string): Promise<void> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+  // --- Private helpers ---
 
-    this.sendAction('status_update', {
-      conversation_jid: jid,
-      text,
+  /**
+   * Download each attachment to the group's mounted scratch space and
+   * return prompt lines that point Claude Code at the local file. Falls
+   * back to the raw URL on per-file failure so the agent at least knows
+   * something was attached.
+   */
+  private async materializeAttachments(
+    jid: string,
+    files: IncomingFile[],
+  ): Promise<string[]> {
+    const group = this.registeredGroups()[jid];
+    let groupRoot: string | null = null;
+    if (group) {
+      try {
+        groupRoot = resolveGroupFolderPath(group.folder);
+      } catch (err) {
+        logger.warn(
+          { err, jid, folder: group.folder },
+          'hwmapp: cannot resolve group folder for attachments',
+        );
+      }
+    } else {
+      logger.warn(
+        { jid },
+        'hwmapp: no registered group for jid — sending attachment URLs raw',
+      );
+    }
+
+    // Download in parallel so multiple files don't compound latency;
+    // each download has its own timeout so one slow URL can't block.
+    const results = await Promise.all(
+      files.map(async (f) => {
+        const localPath = groupRoot
+          ? await downloadAttachment(f, jid, groupRoot)
+          : null;
+        return { f, localPath };
+      }),
+    );
+
+    return results.map(({ f, localPath }) => {
+      if (localPath) {
+        // Be explicit so Claude Code reaches for the Read tool rather
+        // than guessing from the filename.
+        return `[Attached file at ${localPath} — read it with the Read tool. Original filename: ${f.filename} (${f.content_type})]`;
+      }
+      return `[Attached: ${f.filename} (${f.content_type}) — could not be downloaded; URL: ${f.url}]`;
     });
   }
-
-  // --- Private helpers ---
 
   private sendAction(action: string, data: Record<string, unknown>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -374,10 +466,121 @@ class HwmAppChannel implements Channel {
   }
 }
 
-registerChannel('hwmapp', (opts: ChannelOpts) => {
-  if (!HWM_URL || !HWM_TOKEN) {
+// The group folder is mounted into the container at /workspace/group
+// (see container-runner.ts:96). Attachments live under attachments/
+// inside that folder so Claude Code reads them via that container path.
+const CONTAINER_GROUP_PATH = '/workspace/group';
+const ATTACHMENTS_SUBDIR = 'attachments';
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MB
+const ATTACHMENT_FETCH_TIMEOUT_MS = 20_000;
+// Hard ceiling around the whole materialization step. If anything in
+// the download/parallel orchestration hangs past this, we give up on
+// the attachments and forward the user's text + URL-fallback lines so
+// the agent always responds.
+const ATTACHMENT_TOTAL_TIMEOUT_MS = 30_000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} exceeded ${ms}ms timeout`)),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function downloadAttachment(
+  f: IncomingFile,
+  jid: string,
+  groupRoot: string,
+): Promise<string | null> {
+  const jidSeg = sanitizePathSegment(jid);
+  const fileName = sanitizeFilename(f.filename);
+  const hostDir = path.join(groupRoot, ATTACHMENTS_SUBDIR, jidSeg);
+  const hostPath = path.join(hostDir, fileName);
+  const containerPath = `${CONTAINER_GROUP_PATH}/${ATTACHMENTS_SUBDIR}/${jidSeg}/${fileName}`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    ATTACHMENT_FETCH_TIMEOUT_MS,
+  );
+
+  try {
     logger.info(
-      'HWM app: skipping — ACCOMPLICE_URL or ACCOMPLICE_TOKEN not set',
+      { url: f.url, filename: f.filename },
+      'hwmapp: fetching attachment',
+    );
+    const resp = await fetch(f.url, {
+      signal: controller.signal,
+      redirect: 'follow',
+    });
+    if (!resp.ok) {
+      logger.warn(
+        { url: f.url, status: resp.status, filename: f.filename },
+        'hwmapp: attachment fetch returned non-2xx',
+      );
+      return null;
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.byteLength > MAX_ATTACHMENT_BYTES) {
+      logger.warn(
+        { filename: f.filename, bytes: buf.byteLength },
+        'hwmapp: attachment exceeds size cap, skipping',
+      );
+      return null;
+    }
+    fs.mkdirSync(hostDir, { recursive: true });
+    fs.writeFileSync(hostPath, buf);
+    logger.info(
+      { filename: f.filename, bytes: buf.byteLength, containerPath },
+      'hwmapp: attachment materialized',
+    );
+    return containerPath;
+  } catch (err) {
+    // AbortError shows up here when our timeout fires — log it specifically
+    // so it's distinguishable from network/auth errors in the agent logs.
+    const isTimeout =
+      err instanceof Error &&
+      (err.name === 'AbortError' || err.name === 'TimeoutError');
+    logger.error(
+      { err, url: f.url, filename: f.filename, isTimeout },
+      isTimeout
+        ? 'hwmapp: attachment fetch timed out'
+        : 'hwmapp: attachment download failed',
+    );
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function sanitizeFilename(name: string): string {
+  // Strip path separators and whitespace; keep the rest readable so
+  // Claude can recognise screenshot.png vs invoice.pdf.
+  const cleaned = name.replace(/[\\/\s]+/g, '_').trim();
+  return cleaned || `file_${Date.now()}`;
+}
+
+function sanitizePathSegment(seg: string): string {
+  // JIDs contain `:` (`accomplice:<uuid>`) which is fine on POSIX but
+  // ugly in paths. Replace anything outside [A-Za-z0-9_.-] with `_`.
+  return seg.replace(/[^A-Za-z0-9_.-]+/g, '_');
+}
+
+registerChannel('hwmapp', (opts: ChannelOpts) => {
+  if (!HWM_RELAY_URL || !HWM_RELAY_TOKEN) {
+    logger.info(
+      'hwmapp: skipping — HWM_RELAY_URL/HWM_RELAY_TOKEN (or legacy ACCOMPLICE_URL/ACCOMPLICE_TOKEN) not set',
     );
     return null;
   }
