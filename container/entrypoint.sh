@@ -18,7 +18,10 @@
 LATEST_BACKUP=$(ls -t /home/node/.claude/backups/.claude.json.backup.* 2>/dev/null | head -1)
 if [ -n "$LATEST_BACKUP" ] && [ ! -f /home/node/.claude.json ]; then
   cp "$LATEST_BACKUP" /home/node/.claude.json
-  chown node:node /home/node/.claude.json
+  # Chown to the UID setpriv will switch to below — not the "node" user
+  # (UID 1000) — so the agent process can write to its own config file.
+  # Without this Claude Code logs a warning and falls back to defaults.
+  chown "${RUN_UID:-1000}:${RUN_GID:-1000}" /home/node/.claude.json
 fi
 
 set -e

@@ -495,14 +495,18 @@ async function buildContainerArgs(
     }
   }
 
-  // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
-  args.push('--entrypoint', 'bash');
-
-  // Use per-agent-group image if one has been built, otherwise base image
+  // Let the image's default ENTRYPOINT run (/usr/bin/tini -- /app/entrypoint.sh).
+  // entrypoint.sh does two things v2 needs:
+  //  - restores $HOME/.claude.json from the SDK's backup directory (without
+  //    it Claude Code logs "Claude configuration file not found");
+  //  - setpriv from root → RUN_UID/RUN_GID before exec'ing bun. Claude Code's
+  //    `--dangerously-skip-permissions` flag (which the SDK always passes)
+  //    refuses to run as root and exits 1.
+  // Earlier this spawn overrode the entrypoint to `bash -c "exec bun run
+  // /app/src/index.ts"`, bypassing both — which is what caused every spawn
+  // to die with "Claude Code process exited with code 1".
   const imageTag = containerConfig.imageTag || CONTAINER_IMAGE;
   args.push(imageTag);
-
-  args.push('-c', 'exec bun run /app/src/index.ts');
 
   return args;
 }
