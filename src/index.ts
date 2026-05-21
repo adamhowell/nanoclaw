@@ -7,12 +7,13 @@
 import path from 'path';
 
 import { backfillContainerConfigs } from './backfill-container-configs.js';
-import { DATA_DIR } from './config.js';
+import { CREDENTIAL_PROXY_PORT, DATA_DIR } from './config.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
 import { migrateGroupsToClaudeLocal } from './claude-md-compose.js';
+import { startCredentialProxy } from './credential-proxy.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
-import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
+import { ensureContainerRuntimeRunning, cleanupOrphans, getProxyBindHost } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
@@ -85,6 +86,14 @@ async function main(): Promise<void> {
   // 2. Container runtime
   ensureContainerRuntimeRunning();
   cleanupOrphans();
+
+  // 2b. Credential proxy — sits between container and Anthropic API,
+  //     reads secrets from .env so containers never see the raw OAuth
+  //     token or API key. Containers connect via ANTHROPIC_BASE_URL =
+  //     http://<host-gateway>:<CREDENTIAL_PROXY_PORT> (set per-spawn in
+  //     container-runner.ts). Without this server up, containers spawn
+  //     fine but every Claude API call gets a connection refused error.
+  await startCredentialProxy(CREDENTIAL_PROXY_PORT, getProxyBindHost());
 
   // 3. Channel adapters
   await initChannelAdapters((adapter: ChannelAdapter): ChannelSetup => {
