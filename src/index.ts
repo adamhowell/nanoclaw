@@ -68,6 +68,13 @@ export { escapeXml, formatMessages } from './router.js';
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
+// Buffers conversation_jids that the platform confirmed creating for each
+// requesting group's currently-running container. Drained at the end of
+// the run (see SchedulerDependencies.consumeNewConversations) so the run's
+// Claude Code session_id can be bound to those new conversations. Without
+// this, scheduled tasks that spawn a new conversation lose their session
+// the moment they exit, and any user follow-up starts cold.
+const recentNewConvsByGroup: Map<string, string[]> = new Map();
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
@@ -622,6 +629,15 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    onNewConversationCreated: (sourceGroup: string, jid: string) => {
+      // Channel confirms an agent-initiated conversation was created on
+      // the platform. Buffer it per source group so the scheduler (or
+      // future runAgent path) can bind this run's Claude Code session
+      // to the new jid when the run completes.
+      const existing = recentNewConvsByGroup.get(sourceGroup) ?? [];
+      existing.push(jid);
+      recentNewConvsByGroup.set(sourceGroup, existing);
+    },
   };
 
   // Create and connect all registered channels.
@@ -661,6 +677,15 @@ async function main(): Promise<void> {
       const text = formatOutbound(rawText);
       if (text) await channel.sendMessage(jid, text);
     },
+    setSession: (key, sessionId) => {
+      sessions[key] = sessionId;
+      setSession(key, sessionId);
+    },
+    consumeNewConversations: (groupFolder) => {
+      const list = recentNewConvsByGroup.get(groupFolder) ?? [];
+      recentNewConvsByGroup.delete(groupFolder);
+      return list;
+    },
   });
   startIpcWatcher({
     sendMessage: (jid, text) => {
@@ -696,14 +721,14 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
-    startConversation: async (title, content) => {
+    startConversation: async (title, content, sourceGroup) => {
       const channel = channels.find((ch) => ch.startConversation);
       if (!channel) {
         throw new Error(
-          'No channel supports starting conversations (Accomplice not connected)',
+          'No channel supports starting conversations (hwm relay not connected)',
         );
       }
-      await channel.startConversation!(title, content);
+      await channel.startConversation!(title, content, sourceGroup);
     },
   });
   queue.setProcessMessagesFn(processGroupMessages);
