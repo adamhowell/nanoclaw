@@ -13,6 +13,7 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_IMAGE_BASE,
   CONTAINER_INSTALL_LABEL,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GROUPS_DIR,
   ONECLI_API_KEY,
@@ -22,7 +23,14 @@ import {
 import { materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars, updateContainerConfigJson } from './db/container-configs.js';
-import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
+import {
+  CONTAINER_HOST_GATEWAY,
+  CONTAINER_RUNTIME_BIN,
+  hostGatewayArgs,
+  readonlyMountArgs,
+  stopContainer,
+} from './container-runtime.js';
+import { detectAuthMode } from './credential-proxy.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
@@ -256,6 +264,10 @@ function buildMounts(
   const claudeDir = path.join(DATA_DIR, 'v2-sessions', agentGroup.id, '.claude-shared');
   syncSkillSymlinks(claudeDir, containerConfig);
 
+  // Note: .env shadowing is handled inside the container entrypoint via
+  // `mount --bind /dev/null /workspace/project/.env` because Apple Container
+  // only supports directory mounts, not file mounts like /dev/null.
+
   // Compose CLAUDE.md fresh every spawn from the shared base, enabled skill
   // fragments, and MCP server instructions. See `claude-md-compose.ts`.
   composeGroupClaudeMd(agentGroup);
@@ -418,37 +430,56 @@ async function buildContainerArgs(
     }
   }
 
-  // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
-  // are routed through the agent vault for credential injection. Treated as
-  // a transient hard failure: if we can't wire the gateway, we don't spawn.
-  // The caller (router or host-sweep) catches the throw, leaves the inbound
-  // message pending, and the next sweep tick retries.
+  // Apple Container credential injection: route API traffic through the
+  // local credential proxy so containers never see real secrets. The proxy
+  // is started by host-core at boot and listens on CONTAINER_HOST_GATEWAY.
+  // (Docker installs route through OneCLI's HTTPS_PROXY instead; Apple
+  // Container can't reach a host-side HTTPS_PROXY reliably, hence the
+  // explicit base URL injection here.)
+  args.push('-e', `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`);
+
+  // Mirror the host's auth method with a placeholder value.
+  // API key mode: SDK sends x-api-key, proxy replaces with real key.
+  // OAuth mode:   SDK exchanges placeholder token for temp API key,
+  //               proxy injects real OAuth token on that exchange request.
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  } else {
+    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // OneCLI agent registration — kept for approval routing (the manual-approval
+  // handler in modules/approvals/onecli-approvals.ts dispatches on agent id).
+  // Credential injection itself is handled by the credential proxy above,
+  // so we deliberately skip `onecli.applyContainerConfig`, which would set
+  // HTTPS_PROXY env vars that conflict with ANTHROPIC_BASE_URL.
   if (agentIdentifier) {
     await onecli.ensureAgent({ name: agentGroup.name, identifier: agentIdentifier });
   }
-  const onecliApplied = await onecli.applyContainerConfig(args, { addHostMapping: false, agent: agentIdentifier });
-  if (!onecliApplied) {
-    throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
-  }
-  log.info('OneCLI gateway applied', { containerName });
 
   // Host gateway
   args.push(...hostGatewayArgs());
 
-  // User mapping
+  // User mapping. Containers start as root so the entrypoint can
+  // `mount --bind /dev/null /workspace/project/.env` to shadow it (Apple
+  // Container has no file-mount support). Privileges are dropped to
+  // RUN_UID/RUN_GID via setpriv in entrypoint.sh.
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+    args.push('-e', `RUN_UID=${hostUid}`);
+    args.push('-e', `RUN_GID=${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
 
-  // Volume mounts
+  // Volume mounts — Apple Container requires `--mount type=bind` syntax
+  // for both readonly and read-write paths (`-v` is Docker-only).
   for (const mount of mounts) {
     if (mount.readonly) {
       args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
     } else {
-      args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
+      args.push('--mount', `type=bind,source=${mount.hostPath},target=${mount.containerPath}`);
     }
   }
 

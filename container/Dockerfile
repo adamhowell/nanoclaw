@@ -27,6 +27,9 @@ ARG BUN_VERSION=1.3.12
 # ---- System dependencies -----------------------------------------------------
 # tini: correct PID 1 / signal forwarding so outbound.db writes finalize on
 # SIGTERM instead of being orphaned by the shell entrypoint.
+# util-linux: provides `setpriv` used by the entrypoint to drop privileges
+# after the root-only `mount --bind` that shadows .env (Apple Container has
+# no file-mount support, so this can't be done from the host side).
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -51,6 +54,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         git \
         tini \
         unzip \
+        util-linux \
     && if [ "$INSTALL_CJK_FONTS" = "true" ]; then \
         apt-get install -y --no-install-recommends fonts-noto-cjk; \
        fi \
@@ -110,6 +114,11 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
+# Note: the .env-shadowing + privilege-drop logic (mount --bind /dev/null,
+# then setpriv to RUN_UID/RUN_GID) lives in `container/entrypoint.sh`,
+# which is COPY'd below. Apple Container has no file-mount support so the
+# shadow must happen container-side as root, then drop to the host user.
+
 # ---- ncl CLI wrapper ----------------------------------------------------------
 # Actual script lives in the mounted source at /app/src/cli/ncl.ts.
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
@@ -124,7 +133,10 @@ RUN mkdir -p /workspace/group /workspace/extra && \
     chown -R node:node /workspace && \
     chmod 777 /home/node
 
-USER node
+# NOTE: deliberately NOT setting `USER node` here. The entrypoint must run
+# as root so it can `mount --bind /dev/null /workspace/project/.env` (Apple
+# Container has no file-mount support). Privileges are dropped to
+# RUN_UID/RUN_GID via `setpriv` inside entrypoint.sh after the mount.
 WORKDIR /workspace/group
 
 # tini is PID 1, reaps zombies, forwards signals cleanly. entrypoint.sh does
