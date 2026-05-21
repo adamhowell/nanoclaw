@@ -336,7 +336,10 @@ class HwmAppChannel implements Channel {
     sourceGroup: string,
   ): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      logger.warn({ title }, 'hwmapp: cannot start conversation — not connected');
+      logger.warn(
+        { title },
+        'hwmapp: cannot start conversation — not connected',
+      );
       return;
     }
 
