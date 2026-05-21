@@ -37,12 +37,18 @@ function detectHostGateway(): string {
  * for Apple Container because bridge100 only exists while containers run,
  * but the proxy must start before any container.
  * The /convert-to-apple-container skill sets this during setup.
+ *
+ * Check is deferred to first use via getProxyBindHost() so test files
+ * and CLI tools that transitively import this module without that env
+ * var set don't crash at import time.
  */
 export const PROXY_BIND_HOST = process.env.CREDENTIAL_PROXY_HOST;
-if (!PROXY_BIND_HOST) {
-  throw new Error(
-    'CREDENTIAL_PROXY_HOST is not set in .env. Run /convert-to-apple-container to configure.',
-  );
+
+export function getProxyBindHost(): string {
+  if (!PROXY_BIND_HOST) {
+    throw new Error('CREDENTIAL_PROXY_HOST is not set in .env. Run /convert-to-apple-container to configure.');
+  }
+  return PROXY_BIND_HOST;
 }
 
 /** CLI args needed for the container to resolve the host gateway. */
