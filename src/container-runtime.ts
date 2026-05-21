@@ -13,6 +13,20 @@ import { log } from './log.js';
 export const CONTAINER_RUNTIME_BIN = 'container';
 
 /**
+ * Whether the runtime supports `type=bind` mounts for individual files (vs.
+ * only directories). Docker supports both; Apple Container (CONTAINER_RUNTIME_BIN
+ * = "container") rejects file mounts with `Error: path '<file>' is not a
+ * directory`. Callers gate per-file RO overlays on this so the spawn doesn't
+ * abort outright on Apple Container — the surrounding directory mount still
+ * provides the file content, just without RO enforcement on that single path.
+ */
+export function supportsFileMounts(): boolean {
+  // Apple Container's CLI is `container`. Anything else (`docker`, `podman`)
+  // is assumed Docker-compatible and supports file mounts.
+  return CONTAINER_RUNTIME_BIN !== 'container';
+}
+
+/**
  * IP address containers use to reach the host machine.
  * Apple Container VMs use a bridge network (192.168.64.x); the host is at the gateway.
  * Detected from the bridge0 interface, falling back to 192.168.64.1.

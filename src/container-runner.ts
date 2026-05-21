@@ -29,6 +29,7 @@ import {
   hostGatewayArgs,
   readonlyMountArgs,
   stopContainer,
+  supportsFileMounts,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
@@ -284,8 +285,14 @@ function buildMounts(
 
   // container.json — nested RO mount on top of RW group dir so the agent
   // can read its config but cannot modify it.
+  //
+  // Apple Container only supports bind-mounting directories, not individual
+  // files (`Error: path '<file>' is not a directory`). Since the parent
+  // group dir is already mounted RW at /workspace/agent, the file is reachable
+  // either way — we just lose the RO enforcement on Apple Container. Skip
+  // the nested file mount there.
   const containerJsonPath = path.join(groupDir, 'container.json');
-  if (fs.existsSync(containerJsonPath)) {
+  if (fs.existsSync(containerJsonPath) && supportsFileMounts()) {
     mounts.push({ hostPath: containerJsonPath, containerPath: '/workspace/agent/container.json', readonly: true });
   }
 
@@ -296,8 +303,9 @@ function buildMounts(
   // `.claude-shared.md` is a symlink whose target (`/app/CLAUDE.md`) is
   // already RO-mounted, so writes through it fail regardless — no need for
   // a nested mount there.
+  // Same Apple-Container file-mount limitation as container.json above.
   const composedClaudeMd = path.join(groupDir, 'CLAUDE.md');
-  if (fs.existsSync(composedClaudeMd)) {
+  if (fs.existsSync(composedClaudeMd) && supportsFileMounts()) {
     mounts.push({ hostPath: composedClaudeMd, containerPath: '/workspace/agent/CLAUDE.md', readonly: true });
   }
   const fragmentsDir = path.join(groupDir, '.claude-fragments');
@@ -313,8 +321,12 @@ function buildMounts(
 
   // Shared CLAUDE.md — read-only, imported by the composed entry point via
   // the `.claude-shared.md` symlink inside the group dir.
+  // Apple Container can't bind-mount individual files, and this one has no
+  // parent-directory mount to fall back to. Bake it into the image build
+  // instead (or skip on Apple Container — the agent runs without /app/CLAUDE.md
+  // and the composer's symlink will resolve to a missing file).
   const sharedClaudeMd = path.join(process.cwd(), 'container', 'CLAUDE.md');
-  if (fs.existsSync(sharedClaudeMd)) {
+  if (fs.existsSync(sharedClaudeMd) && supportsFileMounts()) {
     mounts.push({ hostPath: sharedClaudeMd, containerPath: '/app/CLAUDE.md', readonly: true });
   }
 
