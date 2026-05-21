@@ -135,6 +135,14 @@ function setupLaunchd(
   );
   fs.mkdirSync(path.dirname(plistPath), { recursive: true });
 
+  // Go through the wrapper so `.env` gets sourced into process.env before
+  // node starts. Without it the host can't read CREDENTIAL_PROXY_HOST (and
+  // anything else container-runtime.ts pulls via process.env), and
+  // startCredentialProxy throws on boot. The wrapper does `exec node`, so
+  // PATH must include the node binary's directory.
+  const wrapperPath = `${projectRoot}/scripts/run.sh`;
+  const nodeBinDir = path.dirname(nodePath);
+
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -143,8 +151,7 @@ function setupLaunchd(
     <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${nodePath}</string>
-        <string>${projectRoot}/dist/index.js</string>
+        <string>${wrapperPath}</string>
     </array>
     <key>WorkingDirectory</key>
     <string>${projectRoot}</string>
@@ -155,7 +162,7 @@ function setupLaunchd(
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin</string>
+        <string>${nodeBinDir}:/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin</string>
         <key>HOME</key>
         <string>${homeDir}</string>
     </dict>
@@ -307,19 +314,25 @@ function setupSystemd(
     systemctlPrefix = 'systemctl --user';
   }
 
+  // Same wrapper as launchd — it sources .env so the host can read
+  // CREDENTIAL_PROXY_HOST and other settings via process.env, and PATH
+  // lets the wrapper's `exec node` find the right binary.
+  const wrapperPath = `${projectRoot}/scripts/run.sh`;
+  const nodeBinDir = path.dirname(nodePath);
+
   const unit = `[Unit]
 Description=NanoClaw Personal Assistant
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${nodePath} ${projectRoot}/dist/index.js
+ExecStart=${wrapperPath}
 WorkingDirectory=${projectRoot}
 Restart=always
 RestartSec=5
 KillMode=process
 Environment=HOME=${homeDir}
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin
+Environment=PATH=${nodeBinDir}:/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin
 StandardOutput=append:${projectRoot}/logs/nanoclaw.log
 StandardError=append:${projectRoot}/logs/nanoclaw.error.log
 
