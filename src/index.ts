@@ -51,6 +51,10 @@ async function dispatchResponse(payload: ResponsePayload): Promise<void> {
 // Channel skills uncomment lines in channels/index.ts to enable them.
 import './channels/index.js';
 
+// hwmapp `new_conversation` delivery action — host-side bridge that turns the
+// agent's new_conversation MCP tool call into a startConversation() round-trip.
+import './channels/hwmapp-actions.js';
+
 // Modules barrel — default modules (typing, mount-security) ship here; skills
 // append registry-based modules. Imported for side effects (registrations).
 import './modules/index.js';
