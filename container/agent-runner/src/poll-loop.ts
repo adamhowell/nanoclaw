@@ -17,6 +17,15 @@ import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types
 
 const POLL_INTERVAL_MS = 1000;
 const ACTIVE_POLL_INTERVAL_MS = 500;
+// Stand down (exit cleanly, code 0) after this long with no actionable work.
+// The host sweep re-spawns a fresh container the moment the next due message
+// arrives, so a clean idle-exit is cheaper than lingering until the host's
+// 30-min absolute-ceiling SIGTERM (see src/host-sweep.ts), which exits 143
+// and logs a scary "Killing container past absolute ceiling". Kept at a few
+// minutes so back-and-forth chat reuses the warm SDK subprocess instead of
+// cold-starting every turn. Override via NANOCLAW_IDLE_EXIT_MS (ms) for
+// tests/tuning.
+const IDLE_EXIT_MS = Number(process.env.NANOCLAW_IDLE_EXIT_MS) || 5 * 60 * 1000;
 
 function log(msg: string): void {
   console.error(`[poll-loop] ${msg}`);
@@ -68,6 +77,9 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
   let pollCount = 0;
   let isFirstPoll = true;
+  // Wall-clock of the last time we had real work to do. Drives the idle
+  // stand-down below.
+  let lastActivityTs = Date.now();
   while (true) {
     // Skip system messages — they're responses for MCP tools (e.g., ask_user_question)
     const messages = getPendingMessages(isFirstPoll).filter((m) => m.kind !== 'system');
@@ -79,26 +91,37 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       log(`Poll heartbeat (${pollCount} iterations, ${messages.length} pending)`);
     }
 
-    if (messages.length === 0) {
-      await sleep(POLL_INTERVAL_MS);
-      continue;
-    }
-
-    // Accumulate gate: if the batch contains only trigger=0 rows
-    // (context-only, router-stored under ignored_message_policy='accumulate'),
-    // don't wake the agent. Leave them `pending` — they'll ride along the
-    // next time a real trigger=1 message lands via this same getPendingMessages
-    // query. Without this gate, a warm container keeps processing
+    // No actionable work this tick: either nothing pending, or only
+    // accumulate-only (trigger=0) context rows. The accumulate gate matters
+    // because those rows (router-stored under ignored_message_policy=
+    // 'accumulate') must NOT wake the agent — they're left `pending` to ride
+    // along the next time a real trigger=1 message lands via this same
+    // getPendingMessages query. Without it, a warm container keeps processing
     // (and potentially responding to) every accumulate-only batch, defeating
     // the "store as context, don't engage" contract. Host-side countDueMessages
     // gates the same way for wake-from-cold (see src/db/session-db.ts).
-    if (!messages.some((m) => m.trigger === 1)) {
+    //
+    // Either way we're idle. After IDLE_EXIT_MS of continuous idle, stand down
+    // cleanly (code 0) instead of looping until the host's 30-min ceiling
+    // SIGTERMs us. Any pending accumulate-only rows stay `pending` and are
+    // picked up on the next wake (host re-spawns when a trigger=1 row is due).
+    if (messages.length === 0 || !messages.some((m) => m.trigger === 1)) {
+      if (Date.now() - lastActivityTs > IDLE_EXIT_MS) {
+        log(
+          `Idle ${Math.round((Date.now() - lastActivityTs) / 1000)}s with no actionable messages — standing down (clean exit)`,
+        );
+        return;
+      }
       await sleep(POLL_INTERVAL_MS);
       continue;
     }
 
     const ids = messages.map((m) => m.id);
     markProcessing(ids);
+    // Dequeuing a batch counts as activity — resets the idle stand-down timer
+    // so we don't exit while (or right after) handling work, including the
+    // command-only and script-gated paths below that `continue` early.
+    lastActivityTs = Date.now();
 
     const routing = extractRouting(messages);
 
@@ -215,6 +238,9 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Ensure completed even if processQuery ended without a result event
     // (e.g. stream closed unexpectedly).
     markCompleted(processingIds);
+    // Reset the idle timer to the end of the turn so the warm window (and the
+    // eventual stand-down) is measured from when the agent actually finished.
+    lastActivityTs = Date.now();
     log(`Completed ${ids.length} message(s)`);
   }
 }
