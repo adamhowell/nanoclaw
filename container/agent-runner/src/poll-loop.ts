@@ -203,8 +203,10 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Publish the batch's in_reply_to so MCP tools (send_message, send_file)
     // can stamp it on outbound rows — needed for a2a return-path routing.
     setCurrentInReplyTo(routing.inReplyTo);
+    let endedIdle = false;
     try {
       const result = await processQuery(query, routing, processingIds, config.providerName);
+      endedIdle = result.endedIdle;
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
         setContinuation(config.providerName, continuation);
@@ -238,10 +240,21 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Ensure completed even if processQuery ended without a result event
     // (e.g. stream closed unexpectedly).
     markCompleted(processingIds);
-    // Reset the idle timer to the end of the turn so the warm window (and the
-    // eventual stand-down) is measured from when the agent actually finished.
-    lastActivityTs = Date.now();
     log(`Completed ${ids.length} message(s)`);
+
+    // processQuery keeps the SDK stream open after a turn to catch warm
+    // follow-ups; it returns endedIdle=true when no follow-up arrived within
+    // the warm window and it closed the stream itself. That's our cue to stand
+    // down cleanly (index.ts then process.exit(0)s) rather than loop back and
+    // re-open, letting the host re-spawn on the next due message. Without this
+    // the container would idle until the host's 30-min absolute-ceiling kill.
+    if (endedIdle) {
+      log('No follow-up within warm window — standing down (clean exit)');
+      return;
+    }
+    // Otherwise the turn ended for another reason (a pending command to
+    // reprocess, an error, a stream close) — treat it as activity and loop.
+    lastActivityTs = Date.now();
   }
 }
 
@@ -281,6 +294,9 @@ function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommand
 
 interface QueryResult {
   continuation?: string;
+  // True when processQuery closed the stream itself after the warm window
+  // elapsed with no follow-up — signals the caller to stand down.
+  endedIdle: boolean;
 }
 
 async function processQuery(
@@ -292,6 +308,14 @@ async function processQuery(
   let queryContinuation: string | undefined;
   let done = false;
   let unwrappedNudged = false;
+  // Idle stand-down: the stream is kept open after a turn to catch warm
+  // follow-ups, but not forever. `lastActivityTs` tracks the last SDK event or
+  // pushed follow-up; once we've seen a result and stayed quiet past
+  // IDLE_EXIT_MS, we end the stream ourselves so the container can exit cleanly
+  // (code 0) instead of being SIGTERMed at the host's 30-min ceiling (code 143).
+  let sawResult = false;
+  let endedIdle = false;
+  let lastActivityTs = Date.now();
 
   // Concurrent polling: push follow-ups into the active query as they arrive.
   // We do NOT force-end the stream on silence — keeping the query open avoids
@@ -305,7 +329,7 @@ async function processQuery(
   let pollInFlight = false;
   let endedForCommand = false;
   const pollHandle = setInterval(() => {
-    if (done || pollInFlight || endedForCommand) return;
+    if (done || pollInFlight || endedForCommand || endedIdle) return;
     pollInFlight = true;
 
     void (async () => {
@@ -334,7 +358,17 @@ async function processQuery(
         // initial batch and follow-ups had mismatched thread_ids (e.g. a
         // host-generated welcome trigger with null thread vs a Discord DM reply).
         const newMessages = pending.filter((m) => m.kind !== 'system');
-        if (newMessages.length === 0) return;
+        if (newMessages.length === 0) {
+          // No follow-up waiting. Once the turn has produced a result and we've
+          // stayed idle past the warm window, end the stream so the container
+          // stands down cleanly. The host re-spawns on the next due message.
+          if (sawResult && Date.now() - lastActivityTs > IDLE_EXIT_MS) {
+            log(`Idle ${Math.round((Date.now() - lastActivityTs) / 1000)}s after turn — ending stream to stand down`);
+            endedIdle = true;
+            query.end();
+          }
+          return;
+        }
 
         const newIds = newMessages.map((m) => m.id);
         markProcessing(newIds);
@@ -368,6 +402,7 @@ async function processQuery(
         unwrappedNudged = false;
         query.push(prompt);
         markCompleted(keptIds);
+        lastActivityTs = Date.now();
       } catch (err) {
         // Without this catch the rejection escapes the void IIFE and Node
         // terminates the container on unhandled-rejection. The initial-batch
@@ -385,6 +420,9 @@ async function processQuery(
     for await (const event of query.events) {
       handleEvent(event, routing);
       touchHeartbeat();
+      // Any SDK event = the agent is alive and working; reset the idle clock so
+      // we only stand down after a genuine quiet spell post-result.
+      lastActivityTs = Date.now();
 
       if (event.type === 'init') {
         queryContinuation = event.continuation;
@@ -402,6 +440,7 @@ async function processQuery(
         // follow-up pushes. The agent may have responded via MCP
         // (send_message) mid-turn, or the message may not need a response
         // at all — either way the turn is finished.
+        sawResult = true;
         markCompleted(initialBatchIds);
         if (event.text) {
           const { hasUnwrapped } = dispatchResultText(event.text, routing);
@@ -424,7 +463,7 @@ async function processQuery(
     clearInterval(pollHandle);
   }
 
-  return { continuation: queryContinuation };
+  return { continuation: queryContinuation, endedIdle };
 }
 
 function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
