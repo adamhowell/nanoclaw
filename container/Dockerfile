@@ -102,6 +102,9 @@ ENV PATH="$PNPM_HOME:$PATH"
 # installed". Keep this in lockstep with package.json's `packageManager`.
 ARG PNPM_VERSION=10.33.0
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+# Low-RAM hosts (e.g. 1 GB Raspberry Pi) OOM during agent-browser postinstall:
+# node auto-caps heap to ~512 MB. Raise build heap (swap-backed), reset after the installs.
+ENV NODE_OPTIONS=--max-old-space-size=2048
 
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     echo "only-built-dependencies[]=agent-browser" > /root/.npmrc && \
@@ -113,6 +116,7 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+ENV NODE_OPTIONS=
 
 # Note: the .env-shadowing + privilege-drop logic (mount --bind /dev/null,
 # then setpriv to RUN_UID/RUN_GID) lives in `container/entrypoint.sh`,
