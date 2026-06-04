@@ -34,6 +34,11 @@ import { registerChannelAdapter } from './channel-registry.js';
 const CHANNEL_TYPE = 'hwmapp';
 const ACTION_CABLE_IDENTIFIER = JSON.stringify({ channel: 'AgentRelayChannel' });
 const RECONNECT_DELAY_MS = 5_000;
+// ActionCable pings every 3s. If we hear nothing for this long the socket is
+// half-open (server gone, FIN never arrived) and ws.on('close') will never
+// fire — force-terminate so the close→reconnect path runs.
+const LIVENESS_TIMEOUT_MS = 15_000;
+const LIVENESS_CHECK_MS = 5_000;
 const ATTACHMENT_FETCH_TIMEOUT_MS = 20_000;
 const ATTACHMENT_TOTAL_TIMEOUT_MS = 30_000;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25 MB
@@ -75,6 +80,8 @@ function createAdapter(): HwmAppAdapter | null {
   let ws: WebSocket | null = null;
   let connected = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let livenessTimer: ReturnType<typeof setInterval> | null = null;
+  let lastActivityAt = Date.now();
   let config: ChannelSetup | null = null;
 
   // Routes assistant replies back to the originating user message.
@@ -103,6 +110,26 @@ function createAdapter(): HwmAppAdapter | null {
     }, RECONNECT_DELAY_MS);
   }
 
+  function stopLiveness(): void {
+    if (livenessTimer) {
+      clearInterval(livenessTimer);
+      livenessTimer = null;
+    }
+  }
+
+  function startLiveness(): void {
+    stopLiveness();
+    lastActivityAt = Date.now();
+    livenessTimer = setInterval(() => {
+      const silentMs = Date.now() - lastActivityAt;
+      if (silentMs > LIVENESS_TIMEOUT_MS) {
+        log.warn('hwmapp: no server activity, terminating stale socket', { silentMs });
+        stopLiveness();
+        ws?.terminate();
+      }
+    }, LIVENESS_CHECK_MS);
+  }
+
   function doConnect(): void {
     const url = `${RELAY_URL}?agent_token=${RELAY_TOKEN}`;
     log.info('hwmapp: connecting', { url: RELAY_URL });
@@ -110,10 +137,12 @@ function createAdapter(): HwmAppAdapter | null {
 
     ws.on('open', () => {
       log.info('hwmapp: WebSocket connected');
+      startLiveness();
       send({ command: 'subscribe', identifier: ACTION_CABLE_IDENTIFIER });
     });
 
     ws.on('message', (raw: WebSocket.RawData) => {
+      lastActivityAt = Date.now();
       try {
         const frame = JSON.parse(raw.toString());
         void handleFrame(frame);
@@ -124,6 +153,7 @@ function createAdapter(): HwmAppAdapter | null {
 
     ws.on('close', (code: number) => {
       connected = false;
+      stopLiveness();
       log.warn('hwmapp: WebSocket closed, reconnecting', {
         code,
         delayMs: RECONNECT_DELAY_MS,
@@ -332,6 +362,7 @@ function createAdapter(): HwmAppAdapter | null {
     },
 
     async teardown(): Promise<void> {
+      stopLiveness();
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
