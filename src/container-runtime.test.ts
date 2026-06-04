@@ -71,10 +71,10 @@ describe('ensureContainerRuntimeRunning (docker default)', () => {
     ensureContainerRuntimeRunning();
 
     expect(mockExecSync).toHaveBeenCalledTimes(1);
-    expect(mockExecSync).toHaveBeenCalledWith(
-      `${CONTAINER_RUNTIME_BIN} info --format '{{.ServerVersion}}'`,
-      { stdio: 'pipe', timeout: 10000 },
-    );
+    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} info --format '{{.ServerVersion}}'`, {
+      stdio: 'pipe',
+      timeout: 10000,
+    });
     expect(log.debug).toHaveBeenCalledWith('Container runtime already running');
   });
 
