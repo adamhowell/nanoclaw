@@ -494,10 +494,16 @@ async function buildContainerArgs(
   // RUN_UID/RUN_GID via setpriv in entrypoint.sh.
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
+  // HOME must always point at the image's node-user home. The container starts
+  // as root (HOME=/root); entrypoint setpriv drops to UID 1000 but leaves HOME
+  // as /root, which 1000 can't access — Claude Code then silently yields 0 SDK
+  // messages and the agent produces nothing. Set HOME unconditionally; only the
+  // UID/GID remap stays conditional (skipped when the host UID is already 1000,
+  // e.g. a default Linux user — which is exactly when HOME was being dropped).
+  args.push('-e', 'HOME=/home/node');
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
     args.push('-e', `RUN_UID=${hostUid}`);
     args.push('-e', `RUN_GID=${hostGid}`);
-    args.push('-e', 'HOME=/home/node');
   }
 
   // Volume mounts — Apple Container requires `--mount type=bind` syntax
