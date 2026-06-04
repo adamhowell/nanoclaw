@@ -450,6 +450,20 @@ async function buildContainerArgs(
     args.push('-e', `HOST_BROWSER_TOKEN=${process.env.HOST_BROWSER_TOKEN}`);
   }
 
+  // Explicit per-install credential passthrough. v2 deliberately does NOT dump
+  // the whole host .env into containers, but user-authored scheduled tasks
+  // often reference integration credentials directly in their prompts (e.g. the
+  // MS Graph client-credentials flow: client_secret=$MS_GRAPH_CLIENT_SECRET).
+  // An install lists the var NAMES to forward in CONTAINER_ENV_PASSTHROUGH
+  // (comma-separated) in its .env; each is injected from the host env when set.
+  // Names live only in the install\u2019s .env, never in shared code.
+  for (const key of (process.env.CONTAINER_ENV_PASSTHROUGH || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    if (process.env[key]) args.push('-e', `${key}=${process.env[key]}`);
+  }
+
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
