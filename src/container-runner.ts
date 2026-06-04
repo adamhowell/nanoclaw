@@ -435,6 +435,21 @@ async function buildContainerArgs(
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
 
+  // Host browser service on the Mini. The host-browser container skill
+  // curls $HOST_BROWSER_URL with `X-Auth: $HOST_BROWSER_TOKEN` to read
+  // authed / bot-protected sites (Etsy messages, Stripe, etc.) through real
+  // macOS Chrome. v1's runner injected these; the v2 rewrite dropped them,
+  // so an agent only had the token when it happened to be in conversation
+  // context — fresh sessions failed with "HOST_BROWSER_TOKEN isn't in my
+  // env". Inject from the host .env so the token is deterministic in every
+  // session.
+  if (process.env.HOST_BROWSER_URL) {
+    args.push('-e', `HOST_BROWSER_URL=${process.env.HOST_BROWSER_URL}`);
+  }
+  if (process.env.HOST_BROWSER_TOKEN) {
+    args.push('-e', `HOST_BROWSER_TOKEN=${process.env.HOST_BROWSER_TOKEN}`);
+  }
+
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {
