@@ -89,6 +89,16 @@ if ! $PNPM run build >>"$LOG_FILE" 2>&1; then
   exit 1
 fi
 
+# Stamp the upgrade marker — this script IS our sanctioned update path,
+# and upstream's startup tripwire refuses to boot when the code version
+# moved without a stamp (it exists to catch raw `git pull`s that skip
+# install/build; ours doesn't).
+log "stamping upgrade state"
+if ! $PNPM exec tsx scripts/upgrade-state.ts set >>"$LOG_FILE" 2>&1; then
+  log "upgrade-state stamp failed; NOT restarting (service still on previous code)"
+  exit 1
+fi
+
 log "kicking $SERVICE"
 launchctl kickstart -k "gui/$(id -u)/$SERVICE" >>"$LOG_FILE" 2>&1
 log "deploy complete"
