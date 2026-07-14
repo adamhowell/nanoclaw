@@ -1,9 +1,11 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
+import { TIMEZONE, formatLocalStamp } from '../timezone.js';
 import { registerProvider } from './provider-registry.js';
 import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
 
@@ -16,12 +18,16 @@ function log(msg: string): void {
 // Code's interactive UI and would hang here).
 //
 // - CronCreate / CronDelete / CronList / ScheduleWakeup: we have durable
-//   scheduling via mcp__nanoclaw__schedule_task.
+//   scheduling via `ncl tasks`.
 // - AskUserQuestion: SDK returns a placeholder instead of blocking on a
 //   real answer — we have mcp__nanoclaw__ask_user_question that persists
 //   the question and blocks on the real reply.
 // - EnterPlanMode / ExitPlanMode / EnterWorktree / ExitWorktree: Claude
 //   Code UI affordances; in a headless container they'd appear stuck.
+// - DesignSync: desktop design-tool integration — nothing to sync with in a
+//   headless container (~9.3KB/turn schema).
+// - ReportFindings: code-review-reporting UI affordance with no headless
+//   host surface to receive it (~1.9KB/turn schema).
 const SDK_DISALLOWED_TOOLS = [
   'CronCreate',
   'CronDelete',
@@ -32,6 +38,8 @@ const SDK_DISALLOWED_TOOLS = [
   'ExitPlanMode',
   'EnterWorktree',
   'ExitWorktree',
+  'DesignSync',
+  'ReportFindings',
 ];
 
 // Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived
@@ -188,47 +196,126 @@ const postToolUseHook: HookCallback = async () => {
   return { continue: true };
 };
 
+/**
+ * Read a Claude transcript .jsonl, render a markdown summary, and drop it into
+ * the agent's `conversations/` folder so context survives a compaction or a
+ * session rotation. Best-effort: returns false (and logs) on any failure.
+ */
+function archiveTranscriptFile(transcriptPath: string | undefined, sessionId: string | undefined, assistantName?: string): boolean {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+    log('No transcript found for archiving');
+    return false;
+  }
+
+  try {
+    const content = fs.readFileSync(transcriptPath, 'utf-8');
+    const messages = parseTranscript(content);
+    if (messages.length === 0) return false;
+
+    // Try to get summary from sessions index
+    let summary: string | undefined;
+    const indexPath = path.join(path.dirname(transcriptPath), 'sessions-index.json');
+    if (fs.existsSync(indexPath)) {
+      try {
+        const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+        summary = index.entries?.find((e: { sessionId: string; summary?: string }) => e.sessionId === sessionId)?.summary;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const name = summary
+      ? summary.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50)
+      : `conversation-${new Date().getHours().toString().padStart(2, '0')}${new Date().getMinutes().toString().padStart(2, '0')}`;
+
+    const conversationsDir = process.env.NANOCLAW_CONVERSATIONS_DIR || '/workspace/agent/conversations';
+    fs.mkdirSync(conversationsDir, { recursive: true });
+    // Local calendar date — the fallback `name` above already uses local
+    // hours, and the agent navigates conversations/ by these date prefixes.
+    const filename = `${formatLocalStamp(new Date(), TIMEZONE).slice(0, 10)}-${name}.md`;
+    fs.writeFileSync(path.join(conversationsDir, filename), formatTranscriptMarkdown(messages, summary, assistantName));
+    log(`Archived conversation to ${filename}`);
+    return true;
+  } catch (err) {
+    log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
 function createPreCompactHook(assistantName?: string): HookCallback {
   return async (input) => {
     const preCompact = input as PreCompactHookInput;
-    const { transcript_path: transcriptPath, session_id: sessionId } = preCompact;
-
-    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-      log('No transcript found for archiving');
-      return {};
-    }
-
-    try {
-      const content = fs.readFileSync(transcriptPath, 'utf-8');
-      const messages = parseTranscript(content);
-      if (messages.length === 0) return {};
-
-      // Try to get summary from sessions index
-      let summary: string | undefined;
-      const indexPath = path.join(path.dirname(transcriptPath), 'sessions-index.json');
-      if (fs.existsSync(indexPath)) {
-        try {
-          const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-          summary = index.entries?.find((e: { sessionId: string; summary?: string }) => e.sessionId === sessionId)?.summary;
-        } catch {
-          /* ignore */
-        }
-      }
-
-      const name = summary
-        ? summary.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50)
-        : `conversation-${new Date().getHours().toString().padStart(2, '0')}${new Date().getMinutes().toString().padStart(2, '0')}`;
-
-      const conversationsDir = '/workspace/agent/conversations';
-      fs.mkdirSync(conversationsDir, { recursive: true });
-      const filename = `${new Date().toISOString().split('T')[0]}-${name}.md`;
-      fs.writeFileSync(path.join(conversationsDir, filename), formatTranscriptMarkdown(messages, summary, assistantName));
-      log(`Archived conversation to ${filename}`);
-    } catch (err) {
-      log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    archiveTranscriptFile(preCompact.transcript_path, preCompact.session_id, assistantName);
     return {};
   };
+}
+
+// ── Continuation rotation (cold-resume guard) ──
+
+/**
+ * Resume cost is dominated by transcript size. Past this many bytes a fresh
+ * cold container can't reload the .jsonl before the host's 30-min idle ceiling
+ * fires, so the session is dropped and started clean. Operator-overridable.
+ */
+function transcriptRotateBytes(): number {
+  return Number(process.env.CLAUDE_TRANSCRIPT_ROTATE_BYTES) || 12 * 1024 * 1024;
+}
+
+/**
+ * Secondary age trigger, measured from the transcript's first entry. 0 (or a
+ * non-positive value) disables the age check; size alone then governs.
+ */
+function transcriptRotateAgeMs(): number {
+  const raw = process.env.CLAUDE_TRANSCRIPT_ROTATE_AGE_DAYS;
+  if (raw === undefined || raw.trim() === '') return 14 * 86_400_000;
+  const days = Number(raw);
+  if (!Number.isFinite(days)) return 14 * 86_400_000;
+  // Explicit non-positive override disables the age check; size alone governs.
+  return days > 0 ? days * 86_400_000 : Infinity;
+}
+
+function claudeProjectsDir(): string {
+  const base = process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude');
+  return path.join(base, 'projects');
+}
+
+/**
+ * Locate the .jsonl backing a session id. The SDK names project dirs by a
+ * mangled cwd; rather than reproduce that convention we scan project dirs for
+ * `<sessionId>.jsonl` (session ids are UUIDs, so this is unambiguous).
+ */
+function findTranscriptPath(sessionId: string): string | null {
+  const projects = claudeProjectsDir();
+  let dirs: string[];
+  try {
+    dirs = fs.readdirSync(projects);
+  } catch {
+    return null;
+  }
+  for (const dir of dirs) {
+    const candidate = path.join(projects, dir, `${sessionId}.jsonl`);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** Epoch-ms of the first transcript entry, or null if unreadable. */
+function transcriptStartMs(transcriptPath: string): number | null {
+  try {
+    const fd = fs.openSync(transcriptPath, 'r');
+    try {
+      const buf = Buffer.alloc(4096);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      const firstLine = buf.toString('utf-8', 0, n).split('\n', 1)[0];
+      const ts = JSON.parse(firstLine)?.timestamp;
+      const ms = ts ? Date.parse(ts) : NaN;
+      return Number.isNaN(ms) ? null : ms;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
 }
 
 // ── Provider ──
@@ -277,6 +364,41 @@ export class ClaudeProvider implements AgentProvider {
     return STALE_SESSION_RE.test(msg);
   }
 
+  maybeRotateContinuation(continuation: string): string | null {
+    const transcriptPath = findTranscriptPath(continuation);
+    if (!transcriptPath) return null;
+
+    let size: number;
+    try {
+      size = fs.statSync(transcriptPath).size;
+    } catch {
+      return null;
+    }
+
+    const maxBytes = transcriptRotateBytes();
+    const startMs = transcriptStartMs(transcriptPath);
+    const ageMs = startMs === null ? 0 : Date.now() - startMs;
+    const maxAgeMs = transcriptRotateAgeMs();
+
+    let reason: string | null = null;
+    if (size > maxBytes) {
+      reason = `transcript ${(size / 1_048_576).toFixed(1)}MB > ${(maxBytes / 1_048_576).toFixed(0)}MB cap`;
+    } else if (startMs !== null && ageMs > maxAgeMs) {
+      reason = `transcript ${(ageMs / 86_400_000).toFixed(1)}d old > ${(maxAgeMs / 86_400_000).toFixed(0)}d cap`;
+    }
+    if (!reason) return null;
+
+    // Preserve a readable summary, then move the heavy .jsonl out of the
+    // resume path so the SDK starts a fresh session and the disk is reclaimed.
+    archiveTranscriptFile(transcriptPath, continuation, this.assistantName);
+    try {
+      fs.renameSync(transcriptPath, `${transcriptPath}.rotated-${Date.now()}`);
+    } catch (err) {
+      log(`Failed to move rotated transcript aside: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return reason;
+  }
+
   query(input: QueryInput): AgentQuery {
     const stream = new MessageStream();
     stream.push(input.prompt);
@@ -302,7 +424,7 @@ export class ClaudeProvider implements AgentProvider {
         effort: this.effort as any,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
-        settingSources: ['project', 'user'],
+        settingSources: ['project', 'user', 'local'],
         mcpServers: this.mcpServers,
         // Pipe Claude Code's stderr into our log. Without this the SDK
         // discards stderr (stdio:ignore), so a non-zero exit surfaces as
@@ -337,11 +459,16 @@ export class ClaudeProvider implements AgentProvider {
         if (message.type === 'system' && message.subtype === 'init') {
           yield { type: 'init', continuation: message.session_id };
         } else if (message.type === 'result') {
-          const text = 'result' in message ? (message as { result?: string }).result ?? null : null;
-          yield { type: 'result', text };
+          // `result` text exists only on subtype:"success"; error subtypes
+          // (e.g. a non-retryable 403 billing_error) carry their message in
+          // `errors[]` instead. Surface either so the poll-loop can deliver a
+          // billing/quota notice to the user rather than dropping the turn.
+          const m = message as { result?: string; is_error?: boolean; errors?: string[] };
+          const text = m.result ?? (m.errors && m.errors.length > 0 ? m.errors.join('\n') : null);
+          yield { type: 'result', text, isError: m.is_error === true };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
           yield { type: 'error', message: 'API retry', retryable: true };
-        } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'rate_limit_event') {
+        } else if (message.type === 'rate_limit_event') {
           yield { type: 'error', message: 'Rate limit', retryable: false, classification: 'quota' };
         } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary') {
           const meta = (message as { compact_metadata?: { pre_tokens?: number } }).compact_metadata;

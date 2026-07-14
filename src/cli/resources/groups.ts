@@ -1,6 +1,10 @@
-import type { McpServerConfig } from '../../container-config.js';
+import { randomUUID } from 'crypto';
+
+import type { AdditionalMountConfig, McpServerConfig } from '../../container-config.js';
 import { buildAgentGroupImage, killContainer, wakeContainer } from '../../container-runner.js';
 import { restartAgentGroupContainers } from '../../container-restart.js';
+import { createAgentGroup, getAgentGroupByFolder } from '../../db/agent-groups.js';
+import { getDb, hasTable } from '../../db/connection.js';
 import { getSession } from '../../db/sessions.js';
 import { writeSessionMessage } from '../../session-manager.js';
 import {
@@ -8,7 +12,9 @@ import {
   updateContainerConfigScalars,
   updateContainerConfigJson,
 } from '../../db/container-configs.js';
-import type { ContainerConfigRow } from '../../types.js';
+import { initGroupFilesystem } from '../../group-init.js';
+import { createAgentFromTemplate } from '../../templates/create-agent.js';
+import type { AgentGroup, ContainerConfigRow } from '../../types.js';
 import { registerResource } from '../crud.js';
 
 /** Deserialize JSON columns for display. */
@@ -57,8 +63,135 @@ registerResource({
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
-  operations: { list: 'open', get: 'open', create: 'approval', update: 'approval', delete: 'approval' },
+  // `create` and `delete` are custom (below): create needs a `--template`
+  // branch, and the generic create inserts a bare agent_groups row but never
+  // the container_config a working group needs; the generic single-table
+  // DELETE violates FK constraints (#2525).
+  operations: { list: 'open', get: 'open', update: 'approval' },
   customOperations: {
+    create: {
+      access: 'approval',
+      description:
+        'Create (or return the existing) agent group with its container config. Idempotent on --folder. ' +
+        'With --template <ref>, stamp from a local template under templates/ (MCP servers + instructions ' +
+        '+ skills + paused recurring tasks). Use --folder <slug> and --name <display name>.',
+      handler: async (args) => {
+        if (args.template) {
+          return createAgentFromTemplate(String(args.template), {
+            name: args.name ? String(args.name) : undefined,
+          });
+        }
+        const folder = args.folder as string;
+        if (!folder) throw new Error('--folder is required');
+        const name = (args.name as string) ?? folder;
+        const existing = getAgentGroupByFolder(folder);
+        if (existing) {
+          initGroupFilesystem(existing); // ensure a reused group is fully configured too (idempotent; also repairs a missing workspace folder)
+          return existing;
+        }
+        const id = `ag-${randomUUID()}`;
+        const group: AgentGroup = { id, name, folder, agent_provider: null, created_at: new Date().toISOString() };
+        createAgentGroup(group);
+        // Provision the workspace folder and the `container_configs` row that
+        // `getContainerConfig` and the spawn path require. Without this, a
+        // group created via `ncl groups create` would throw "Container config
+        // not found" on first spawn and stay broken until the host restart
+        // backfill ran (#2415). The template branch above provisions its own
+        // config + folder in `createAgentFromTemplate`; this covers the bare
+        // path. Mirrors what `setup/register.ts` does after creating an agent
+        // group via the setup flow. The config row is stamped with the
+        // instance default provider (`ensureContainerConfig` inside) — per-group
+        // `groups config update --provider` still wins.
+        initGroupFilesystem(group);
+        return getAgentGroupByFolder(folder);
+      },
+    },
+    delete: {
+      access: 'approval',
+      description:
+        'Delete an agent group and its dependent rows (sessions, destinations, approvals, role grants, ' +
+        'memberships, channel wirings). FK-ordered cascade in a single transaction. ' +
+        'Use --id <group-id>. Out of scope: killing running containers, on-disk cleanup of groups/<folder>/ and data/v2-sessions/<group-id>/.',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const db = getDb();
+
+        // Verify the group exists before doing anything — preserves the
+        // genericDelete behaviour of throwing "not found" for unknown IDs.
+        const exists = db.prepare('SELECT 1 FROM agent_groups WHERE id = ? LIMIT 1').get(id);
+        if (!exists) throw new Error(`group not found: ${id}`);
+
+        const hasAgentDestinations = hasTable(db, 'agent_destinations');
+        const hasPendingApprovals = hasTable(db, 'pending_approvals');
+
+        // FK-ordered cascade. Single sync transaction — better-sqlite3 rolls
+        // back the whole thing if any statement throws (e.g. an FK constraint
+        // we missed), so the central DB stays consistent. The `removed` counts
+        // are sourced from each DELETE's `changes` so they describe exactly
+        // what the transaction did, not a separate pre-flight snapshot.
+        const cascade = db.transaction((groupId: string) => {
+          const counts = {
+            sessions: 0,
+            pending_questions: 0,
+            pending_approvals: 0,
+            agent_destinations_owned: 0,
+            agent_destinations_pointing: 0,
+            pending_sender_approvals: 0,
+            pending_channel_approvals: 0,
+            messaging_group_agents: 0,
+            agent_group_members: 0,
+            user_roles: 0,
+            container_configs: 0,
+          };
+
+          if (hasAgentDestinations) {
+            counts.agent_destinations_owned = db
+              .prepare('DELETE FROM agent_destinations WHERE agent_group_id = ?')
+              .run(groupId).changes;
+            counts.agent_destinations_pointing = db
+              .prepare('DELETE FROM agent_destinations WHERE target_type = ? AND target_id = ?')
+              .run('agent', groupId).changes;
+          }
+          counts.pending_questions = db
+            .prepare(
+              'DELETE FROM pending_questions WHERE session_id IN (SELECT id FROM sessions WHERE agent_group_id = ?)',
+            )
+            .run(groupId).changes;
+          if (hasPendingApprovals) {
+            counts.pending_approvals = db
+              .prepare(
+                'DELETE FROM pending_approvals WHERE agent_group_id = ? OR session_id IN (SELECT id FROM sessions WHERE agent_group_id = ?)',
+              )
+              .run(groupId, groupId).changes;
+          }
+          counts.sessions = db.prepare('DELETE FROM sessions WHERE agent_group_id = ?').run(groupId).changes;
+          counts.pending_sender_approvals = db
+            .prepare('DELETE FROM pending_sender_approvals WHERE agent_group_id = ?')
+            .run(groupId).changes;
+          counts.pending_channel_approvals = db
+            .prepare('DELETE FROM pending_channel_approvals WHERE agent_group_id = ?')
+            .run(groupId).changes;
+          counts.messaging_group_agents = db
+            .prepare('DELETE FROM messaging_group_agents WHERE agent_group_id = ?')
+            .run(groupId).changes;
+          counts.agent_group_members = db
+            .prepare('DELETE FROM agent_group_members WHERE agent_group_id = ?')
+            .run(groupId).changes;
+          counts.user_roles = db.prepare('DELETE FROM user_roles WHERE agent_group_id = ?').run(groupId).changes;
+          // migration-014 has ON DELETE CASCADE on container_configs.agent_group_id;
+          // the explicit delete here mirrors the other tables and surfaces the count.
+          counts.container_configs = db
+            .prepare('DELETE FROM container_configs WHERE agent_group_id = ?')
+            .run(groupId).changes;
+          db.prepare('DELETE FROM agent_groups WHERE id = ?').run(groupId);
+          return counts;
+        });
+        const removed = cascade(id);
+
+        return { deleted: id, removed };
+      },
+    },
     restart: {
       access: 'approval',
       description:
@@ -277,6 +410,58 @@ registerResource({
           removed: { apt: apt || null, npm: npm || null },
           note: 'Image rebuild required for package changes to take effect.',
         };
+      },
+    },
+    'config add-mount': {
+      access: 'approval',
+      hostOnly: true,
+      description:
+        "Mount a host directory into a group's containers. OPERATOR-ONLY — never runnable from " +
+        'inside a container (mounting host paths is a filesystem-access boundary). Requires ' +
+        '`ncl groups restart` to take effect. Use --id <group-id> --host <host-path> --container <container-path> [--ro].',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const hostPath = (args.host ?? args['host-path']) as string | undefined;
+        const containerPath = (args.container ?? args['container-path']) as string | undefined;
+        if (!hostPath || !containerPath) throw new Error('Provide --host <host-path> and --container <container-path>');
+
+        const row = getContainerConfig(id);
+        if (!row) throw new Error(`No container config for group: ${id}`);
+
+        const mount: AdditionalMountConfig = {
+          hostPath,
+          containerPath,
+          ...(args.ro || args.readonly ? { readonly: true } : {}),
+        };
+        const existing = JSON.parse(row.additional_mounts) as AdditionalMountConfig[];
+        if (!existing.some((m) => m.hostPath === hostPath && m.containerPath === containerPath)) {
+          existing.push(mount);
+          updateContainerConfigJson(id, 'additional_mounts', existing);
+        }
+        return { added: mount, note: `Run \`ncl groups restart --id ${id}\` for the mount to take effect.` };
+      },
+    },
+    'config remove-mount': {
+      access: 'approval',
+      hostOnly: true,
+      description:
+        'Remove a host mount from a group. OPERATOR-ONLY. Requires `ncl groups restart` to take effect. ' +
+        'Use --id <group-id> --host <host-path> --container <container-path>.',
+      handler: async (args) => {
+        const id = args.id as string;
+        if (!id) throw new Error('--id is required');
+        const hostPath = (args.host ?? args['host-path']) as string | undefined;
+        const containerPath = (args.container ?? args['container-path']) as string | undefined;
+        if (!hostPath || !containerPath) throw new Error('Provide --host <host-path> and --container <container-path>');
+
+        const row = getContainerConfig(id);
+        if (!row) throw new Error(`No container config for group: ${id}`);
+
+        const existing = JSON.parse(row.additional_mounts) as AdditionalMountConfig[];
+        const filtered = existing.filter((m) => !(m.hostPath === hostPath && m.containerPath === containerPath));
+        updateContainerConfigJson(id, 'additional_mounts', filtered);
+        return { removed: { hostPath, containerPath }, note: `Run \`ncl groups restart --id ${id}\` to apply.` };
       },
     },
   },
