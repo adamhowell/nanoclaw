@@ -19,7 +19,9 @@ cd "$SCRIPT_DIR"
 source "$PROJECT_ROOT/setup/lib/install-slug.sh"
 IMAGE_NAME="$(container_image_base)"
 TAG="${1:-latest}"
-CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-container}"
+# Default to docker (matches src/container-runtime.ts — Apple Container is
+# the opt-in, and Linux hosts have no `container` binary at all).
+CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
 
 # Caller's env takes precedence; fall back to .env.
 if [ -z "${INSTALL_CJK_FONTS:-}" ] && [ -f "../.env" ]; then
