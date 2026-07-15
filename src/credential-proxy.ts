@@ -113,3 +113,37 @@ export function detectAuthMode(): AuthMode {
   const secrets = readEnvFile(['ANTHROPIC_API_KEY']);
   return secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
 }
+
+/**
+ * Hostname containers use to reach the host (and thus this proxy). All our
+ * installs run Docker (native or Colima); the spawn always passes
+ * `--add-host=host.docker.internal:host-gateway`, so the name resolves in
+ * every flavor. (Apple Container support was dropped from this fork —
+ * upstream's /convert-to-apple-container is the sanctioned path back.)
+ */
+export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
+
+/**
+ * Address this proxy binds to on the host. `127.0.0.1` is only reachable
+ * from containers under native Linux Docker; VM-based runtimes (Colima,
+ * Docker Desktop) deliver container traffic on the VM bridge interface,
+ * so those installs set CREDENTIAL_PROXY_HOST=0.0.0.0 in .env.
+ */
+export function getProxyBindHost(): string {
+  return process.env.CREDENTIAL_PROXY_HOST || '127.0.0.1';
+}
+
+/**
+ * Container args that route the agent's API traffic through this proxy:
+ * base URL pointed at the host, and a placeholder credential matching the
+ * host's auth mode (API-key mode: SDK sends x-api-key, proxy swaps in the
+ * real key; OAuth mode: SDK exchanges the placeholder token for a temp API
+ * key, proxy injects the real OAuth token on that exchange request).
+ * Deliberately NOT OneCLI's applyContainerConfig — its HTTPS_PROXY env
+ * conflicts with ANTHROPIC_BASE_URL.
+ */
+export function credentialProxyContainerArgs(proxyPort: number): string[] {
+  const credential =
+    detectAuthMode() === 'api-key' ? 'ANTHROPIC_API_KEY=placeholder' : 'CLAUDE_CODE_OAUTH_TOKEN=placeholder';
+  return ['-e', `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${proxyPort}`, '-e', credential];
+}

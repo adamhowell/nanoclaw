@@ -24,11 +24,10 @@ import { getAgentGroup } from './db/agent-groups.js';
 import { recordDroppedMessage } from './db/dropped-messages.js';
 import {
   createMessagingGroup,
-  createMessagingGroupAgent,
   getMessagingGroupAgents,
   getMessagingGroupWithAgentCount,
-  getMessagingGroupsByChannel,
 } from './db/messaging-groups.js';
+import { findWiringTemplate, mirrorTemplateWirings } from './channels/wiring-inheritance.js';
 import { findSessionForAgent } from './db/sessions.js';
 import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
 import { log } from './log.js';
@@ -202,23 +201,9 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     // channels we merely sit in stays silent — no row, no DB writes.
     if (!isMention) return;
 
-    // On channels that opt into wiring inheritance (e.g. hwmapp — see
-    // ChannelAdapter.inheritWiringOnAutoCreate), look up a sibling mg's
-    // template up-front. We use it to seed BOTH the new mg's policy
-    // fields (so the unknown-sender gate doesn't block messages from
-    // the channel's authenticated owner) AND its wirings — same source
-    // of truth, no drift between the two.
-    let template: { mg: MessagingGroup; wirings: MessagingGroupAgent[] } | null = null;
-    if (adapter?.inheritWiringOnAutoCreate) {
-      const siblings = getMessagingGroupsByChannel(event.channelType);
-      for (const sibling of siblings) {
-        const wirings = getMessagingGroupAgents(sibling.id);
-        if (wirings.length > 0) {
-          template = { mg: sibling, wirings };
-          break;
-        }
-      }
-    }
+    // FORK: opted-in channels (hwmapp) seed policy + wirings from a sibling
+    // mg — see channels/wiring-inheritance.ts. Null everywhere else.
+    const template = findWiringTemplate(adapter?.inheritWiringOnAutoCreate, event.channelType);
 
     const mgId = `mg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     mg = {
@@ -230,10 +215,8 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
       instance: event.instance ?? event.channelType,
       name: null,
       is_group: event.message.isGroup ? 1 : 0,
-      // Inherited channels copy policy from the template (our auto-wire
-      // behavior); everything else resolves through the channel's declared
-      // defaults (upstream), whose fallback is the same cautious
-      // 'request_approval' as the historical hardcode.
+      // FORK: template policy first (inherited channels); everything else
+      // resolves through upstream's declared channel defaults.
       unknown_sender_policy:
         template?.mg.unknown_sender_policy ??
         resolveUnknownSenderPolicy(
@@ -254,32 +237,13 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
     });
     agentCount = 0;
 
-    // Mirror the template's wirings onto the new mg so it engages on the
-    // first message without going through the channel-request approval
-    // gate. Other channels (template === null) leave agentCount=0 and
-    // fall through to the gate below for explicit approval.
+    // FORK: clone the template's wirings so the first message engages
+    // without the channel-request gate; template === null falls through
+    // to the gate below (upstream behavior).
     if (template) {
-      const wiringNow = new Date().toISOString();
-      for (const w of template.wirings) {
-        createMessagingGroupAgent({
-          id: `mga-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          messaging_group_id: mgId,
-          agent_group_id: w.agent_group_id,
-          session_mode: w.session_mode,
-          priority: w.priority,
-          engage_mode: w.engage_mode,
-          engage_pattern: w.engage_pattern,
-          sender_scope: w.sender_scope,
-          ignored_message_policy: w.ignored_message_policy,
-          created_at: wiringNow,
-        });
-      }
-      agentCount = template.wirings.length;
-      log.info('Inherited wiring for auto-created messaging group', {
-        messagingGroupId: mgId,
+      agentCount = mirrorTemplateWirings(template, mgId, {
         channelType: event.channelType,
         platformId: event.platformId,
-        wiringsCloned: template.wirings.length,
       });
     }
   } else {

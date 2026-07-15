@@ -37,9 +37,12 @@ describe('buildContainerArgs credential flow (structural)', () => {
   // can't silently reintroduce them.
   it('injects the credential proxy and never applies the OneCLI gateway', () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'container-runner.ts'), 'utf-8');
-    expect(src.indexOf('ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}')).toBeGreaterThan(-1);
+    expect(src.indexOf('args.push(...credentialProxyContainerArgs(CREDENTIAL_PROXY_PORT))')).toBeGreaterThan(-1);
     expect(src.indexOf('applyContainerConfig(')).toBe(-1); // call sites only — the explanatory comment may name it
     expect(src.indexOf("args.push('--entrypoint'")).toBe(-1);
+    // The proxy args themselves live in credential-proxy.ts (fork-owned).
+    const proxy = fs.readFileSync(path.join(process.cwd(), 'src', 'credential-proxy.ts'), 'utf-8');
+    expect(proxy.indexOf('ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}')).toBeGreaterThan(-1);
   });
 });
 

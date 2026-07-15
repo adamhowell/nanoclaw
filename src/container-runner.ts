@@ -25,16 +25,10 @@ import {
 } from './config.js';
 import { materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
-import { updateContainerConfigScalars, updateContainerConfigJson } from './db/container-configs.js';
-import {
-  CONTAINER_HOST_GATEWAY,
-  CONTAINER_RUNTIME_BIN,
-  hostGatewayArgs,
-  readonlyMountArgs,
-  stopContainer,
-  supportsFileMounts,
-} from './container-runtime.js';
-import { detectAuthMode } from './credential-proxy.js';
+import { updateContainerConfigScalars } from './db/container-configs.js';
+import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
+import { credentialProxyContainerArgs } from './credential-proxy.js';
+import { hostEnvPassthroughArgs } from './host-env-passthrough.js';
 import { EGRESS_NETWORK, egressNetworkArgs, ensureEgressNetwork } from './egress-lockdown.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
@@ -292,10 +286,6 @@ export function buildMounts(
     // Sync skill symlinks based on container.json selection before mounting.
     syncSkillSymlinks(claudeDir, containerConfig);
 
-    // Note: .env shadowing is handled inside the container entrypoint via
-    // `mount --bind /dev/null /workspace/project/.env` because Apple Container
-    // only supports directory mounts, not file mounts like /dev/null.
-
     // Compose CLAUDE.md fresh every spawn from the shared base, enabled skill
     // fragments, and MCP server instructions. See `claude-md-compose.ts`.
     composeGroupClaudeMd(agentGroup);
@@ -313,14 +303,8 @@ export function buildMounts(
 
   // container.json — nested RO mount on top of RW group dir so the agent
   // can read its config but cannot modify it.
-  //
-  // Apple Container only supports bind-mounting directories, not individual
-  // files (`Error: path '<file>' is not a directory`). Since the parent
-  // group dir is already mounted RW at /workspace/agent, the file is reachable
-  // either way — we just lose the RO enforcement on Apple Container. Skip
-  // the nested file mount there.
   const containerJsonPath = path.join(groupDir, 'container.json');
-  if (fs.existsSync(containerJsonPath) && supportsFileMounts()) {
+  if (fs.existsSync(containerJsonPath)) {
     mounts.push({ hostPath: containerJsonPath, containerPath: '/workspace/agent/container.json', readonly: true });
   }
 
@@ -331,9 +315,8 @@ export function buildMounts(
   // `.claude-shared.md` is a symlink whose target (`/app/CLAUDE.md`) is
   // already RO-mounted, so writes through it fail regardless — no need for
   // a nested mount there.
-  // Same Apple-Container file-mount limitation as container.json above.
   const composedClaudeMd = path.join(groupDir, 'CLAUDE.md');
-  if (defaultSurfaces && fs.existsSync(composedClaudeMd) && supportsFileMounts()) {
+  if (defaultSurfaces && fs.existsSync(composedClaudeMd)) {
     mounts.push({ hostPath: composedClaudeMd, containerPath: '/workspace/agent/CLAUDE.md', readonly: true });
   }
   const fragmentsDir = path.join(groupDir, '.claude-fragments');
@@ -343,12 +326,8 @@ export function buildMounts(
 
   // Shared CLAUDE.md — read-only, imported by the composed entry point via
   // the `.claude-shared.md` symlink inside the group dir.
-  // Apple Container can't bind-mount individual files, and this one has no
-  // parent-directory mount to fall back to. Bake it into the image build
-  // instead (or skip on Apple Container — the agent runs without /app/CLAUDE.md
-  // and the composer's symlink will resolve to a missing file).
   const sharedClaudeMd = path.join(process.cwd(), 'container', 'CLAUDE.md');
-  if (defaultSurfaces && fs.existsSync(sharedClaudeMd) && supportsFileMounts()) {
+  if (defaultSurfaces && fs.existsSync(sharedClaudeMd)) {
     mounts.push({ hostPath: sharedClaudeMd, containerPath: '/app/CLAUDE.md', readonly: true });
   }
 
@@ -477,34 +456,8 @@ async function buildContainerArgs(
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Host browser service on the Mini. The host-browser container skill
-  // curls $HOST_BROWSER_URL with `X-Auth: $HOST_BROWSER_TOKEN` to read
-  // authed / bot-protected sites (Etsy messages, Stripe, etc.) through real
-  // macOS Chrome. v1's runner injected these; the v2 rewrite dropped them,
-  // so an agent only had the token when it happened to be in conversation
-  // context — fresh sessions failed with "HOST_BROWSER_TOKEN isn't in my
-  // env". Inject from the host .env so the token is deterministic in every
-  // session.
-  if (process.env.HOST_BROWSER_URL) {
-    args.push('-e', `HOST_BROWSER_URL=${process.env.HOST_BROWSER_URL}`);
-  }
-  if (process.env.HOST_BROWSER_TOKEN) {
-    args.push('-e', `HOST_BROWSER_TOKEN=${process.env.HOST_BROWSER_TOKEN}`);
-  }
-
-  // Explicit per-install credential passthrough. v2 deliberately does NOT dump
-  // the whole host .env into containers, but user-authored scheduled tasks
-  // often reference integration credentials directly in their prompts (e.g. the
-  // MS Graph client-credentials flow: client_secret=$MS_GRAPH_CLIENT_SECRET).
-  // An install lists the var NAMES to forward in CONTAINER_ENV_PASSTHROUGH
-  // (comma-separated) in its .env; each is injected from the host env when set.
-  // Names live only in the install\u2019s .env, never in shared code.
-  for (const key of (process.env.CONTAINER_ENV_PASSTHROUGH || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)) {
-    if (process.env[key]) args.push('-e', `${key}=${process.env[key]}`);
-  }
+  // FORK: host-browser + per-install env passthrough — see host-env-passthrough.ts.
+  args.push(...hostEnvPassthroughArgs());
 
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
@@ -513,24 +466,9 @@ async function buildContainerArgs(
     }
   }
 
-  // Apple Container credential injection: route API traffic through the
-  // local credential proxy so containers never see real secrets. The proxy
-  // is started by host-core at boot and listens on CONTAINER_HOST_GATEWAY.
-  // (Docker installs route through OneCLI's HTTPS_PROXY instead; Apple
-  // Container can't reach a host-side HTTPS_PROXY reliably, hence the
-  // explicit base URL injection here.)
-  args.push('-e', `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`);
-
-  // Mirror the host's auth method with a placeholder value.
-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
-  //               proxy injects real OAuth token on that exchange request.
-  const authMode = detectAuthMode();
-  if (authMode === 'api-key') {
-    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
-  } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
-  }
+  // FORK: route the agent's API traffic through the local credential proxy
+  // (base URL + placeholder credential) — see credential-proxy.ts.
+  args.push(...credentialProxyContainerArgs(CREDENTIAL_PROXY_PORT));
 
   // OneCLI agent registration — kept for approval routing (the manual-approval
   // handler in modules/approvals/onecli-approvals.ts dispatches on agent id).
@@ -551,10 +489,9 @@ async function buildContainerArgs(
     args.push(...hostGatewayArgs());
   }
 
-  // User mapping. Containers start as root so the entrypoint can
-  // `mount --bind /dev/null /workspace/project/.env` to shadow it (Apple
-  // Container has no file-mount support). Privileges are dropped to
-  // RUN_UID/RUN_GID via setpriv in entrypoint.sh.
+  // FORK user mapping: containers start as root so the image entrypoint can
+  // shadow /workspace/project/.env and then setpriv down to RUN_UID/RUN_GID
+  // (see container/entrypoint.sh).
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   // HOME must always point at the image's node-user home. The container starts
@@ -569,29 +506,20 @@ async function buildContainerArgs(
     args.push('-e', `RUN_GID=${hostGid}`);
   }
 
-  // Volume mounts — Apple Container requires `--mount type=bind` syntax
-  // for both readonly and read-write paths (`-v` is Docker-only).
+  // Volume mounts
   for (const mount of mounts) {
     if (mount.readonly) {
       args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
     } else {
-      args.push('--mount', `type=bind,source=${mount.hostPath},target=${mount.containerPath}`);
+      args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
     }
   }
 
-  // Let the image's default ENTRYPOINT run (/usr/bin/tini -- /app/entrypoint.sh).
-  // entrypoint.sh does two things v2 needs:
-  //  - restores $HOME/.claude.json from the SDK's backup directory (without
-  //    it Claude Code logs "Claude configuration file not found");
-  //  - setpriv from root → RUN_UID/RUN_GID before exec'ing bun. Claude Code's
-  //    `--dangerously-skip-permissions` flag (which the SDK always passes)
-  //    refuses to run as root and exits 1.
-  // Earlier this spawn overrode the entrypoint to `bash -c "exec bun run
-  // /app/src/index.ts"`, bypassing both — which is what caused every spawn
-  // to die with "Claude Code process exited with code 1".
-  // (Upstream re-introduced an `--entrypoint bash` override + a hard OneCLI
-  // applyContainerConfig gate here; both are deliberately NOT taken — our
-  // credential proxy replaces the gateway, and the image entrypoint must run.)
+  // FORK: no `--entrypoint bash` override and no hard OneCLI
+  // applyContainerConfig gate (both upstream). The image ENTRYPOINT must run:
+  // entrypoint.sh restores $HOME/.claude.json and setprivs root → RUN_UID
+  // before exec'ing bun — bypassing it makes every spawn exit 1 (Claude Code
+  // refuses to run as root). Guarded by container-runner.test.ts.
   const imageTag = containerConfig.imageTag || CONTAINER_IMAGE;
   args.push(imageTag);
 

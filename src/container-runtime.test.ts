@@ -34,16 +34,16 @@ beforeEach(() => {
 // --- Pure functions ---
 
 describe('readonlyMountArgs', () => {
-  it('returns --mount flag with type=bind and readonly', () => {
+  it('returns -v flag with :ro suffix', () => {
     const args = readonlyMountArgs('/host/path', '/container/path');
-    expect(args).toEqual(['--mount', 'type=bind,source=/host/path,target=/container/path,readonly']);
+    expect(args).toEqual(['-v', '/host/path:/container/path:ro']);
   });
 });
 
 describe('stopContainer', () => {
-  it('calls container stop for valid container names', () => {
+  it('calls docker stop for valid container names', () => {
     stopContainer('nanoclaw-test-123');
-    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} stop nanoclaw-test-123`, {
+    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-test-123`, {
       stdio: 'pipe',
     });
   });
@@ -57,78 +57,68 @@ describe('stopContainer', () => {
 });
 
 // --- ensureContainerRuntimeRunning ---
-//
-// Default runtime is docker (CONTAINER_RUNTIME_BIN). Docker's health check
-// is `docker info`; there is no in-CLI start command — the daemon comes up
-// via the OS service manager (Colima, Docker Desktop, systemd). The
-// Apple-Container-specific `system status` / `system start` semantics are
-// covered by a separate describe block below.
 
-describe('ensureContainerRuntimeRunning (docker default)', () => {
-  it('does nothing when daemon responds to info', () => {
-    mockExecSync.mockReturnValueOnce('27.0.1\n');
+describe('ensureContainerRuntimeRunning', () => {
+  it('does nothing when runtime is already running', () => {
+    mockExecSync.mockReturnValueOnce('');
 
     ensureContainerRuntimeRunning();
 
     expect(mockExecSync).toHaveBeenCalledTimes(1);
-    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} info --format '{{.ServerVersion}}'`, {
+    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} info`, {
       stdio: 'pipe',
       timeout: 10000,
     });
     expect(log.debug).toHaveBeenCalledWith('Container runtime already running');
   });
 
-  it('throws when info fails — no in-CLI start to fall back to', () => {
-    mockExecSync.mockImplementation(() => {
+  it('throws when docker info fails', () => {
+    mockExecSync.mockImplementationOnce(() => {
       throw new Error('Cannot connect to the Docker daemon');
     });
 
     expect(() => ensureContainerRuntimeRunning()).toThrow('Container runtime is required but failed to start');
-    // Docker path makes exactly one execSync call (info) and then throws,
-    // unlike Apple Container which tries `system start` second.
-    expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(log.error).toHaveBeenCalled();
   });
 });
 
 // --- cleanupOrphans ---
-//
-// Docker default: server-side label filter via `ps -q --filter label=...`.
-// Apple Container has no equivalent and uses a JSON-list-and-grep fallback;
-// that branch is exercised via the env-override block below.
 
-describe('cleanupOrphans (docker default)', () => {
-  const expectedListCmd = `${CONTAINER_RUNTIME_BIN} ps -q --filter status=running --filter label=${CONTAINER_INSTALL_LABEL}`;
-
-  it('uses docker ps -q with label filter', () => {
+describe('cleanupOrphans', () => {
+  it('filters ps by the install label so peers are not reaped', () => {
     mockExecSync.mockReturnValueOnce('');
 
     cleanupOrphans();
 
-    expect(mockExecSync).toHaveBeenCalledWith(expectedListCmd, expect.any(Object));
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} ps --filter label=${CONTAINER_INSTALL_LABEL} --format '{{.Names}}'`,
+      expect.any(Object),
+    );
   });
 
-  it('stops every container ID returned', () => {
-    mockExecSync.mockReturnValueOnce('nanoclaw-group1-111\nnanoclaw-group3-333\n');
+  it('stops orphaned nanoclaw containers', () => {
+    // docker ps returns container names, one per line
+    mockExecSync.mockReturnValueOnce('nanoclaw-group1-111\nnanoclaw-group2-222\n');
     // stop calls succeed
     mockExecSync.mockReturnValue('');
 
     cleanupOrphans();
 
+    // ps + 2 stop calls
     expect(mockExecSync).toHaveBeenCalledTimes(3);
-    expect(mockExecSync).toHaveBeenNthCalledWith(2, `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group1-111`, {
+    expect(mockExecSync).toHaveBeenNthCalledWith(2, `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group1-111`, {
       stdio: 'pipe',
     });
-    expect(mockExecSync).toHaveBeenNthCalledWith(3, `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group3-333`, {
+    expect(mockExecSync).toHaveBeenNthCalledWith(3, `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group2-222`, {
       stdio: 'pipe',
     });
     expect(log.info).toHaveBeenCalledWith('Stopped orphaned containers', {
       count: 2,
-      names: ['nanoclaw-group1-111', 'nanoclaw-group3-333'],
+      names: ['nanoclaw-group1-111', 'nanoclaw-group2-222'],
     });
   });
 
-  it('does nothing when ps returns empty', () => {
+  it('does nothing when no orphans exist', () => {
     mockExecSync.mockReturnValueOnce('');
 
     cleanupOrphans();
@@ -139,7 +129,7 @@ describe('cleanupOrphans (docker default)', () => {
 
   it('warns and continues when ps fails', () => {
     mockExecSync.mockImplementationOnce(() => {
-      throw new Error('docker daemon not available');
+      throw new Error('docker not available');
     });
 
     cleanupOrphans(); // should not throw
