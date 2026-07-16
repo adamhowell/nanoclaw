@@ -26,9 +26,24 @@ LOG_FILE="$LOG_DIR/auto-deploy.log"
 PROJECT_ROOT="$REPO_DIR"
 # shellcheck disable=SC1091
 source "$REPO_DIR/setup/lib/install-slug.sh"
-SERVICE=$(launchd_label)
-PNPM="/opt/homebrew/bin/pnpm"
-GIT="/usr/bin/git"
+# Portable across both installs: launchd on the Mac mini (Burnie),
+# systemd --user on Linux (rexcom).
+OS="$(uname -s)"
+if [ "$OS" = "Darwin" ]; then
+  SERVICE=$(launchd_label)
+else
+  SERVICE="nanoclaw"
+fi
+# pnpm lives at the homebrew path on macOS; on Linux fall back to
+# whatever is on PATH, then corepack (ships with node on rexcom).
+if [ -x /opt/homebrew/bin/pnpm ]; then
+  PNPM="/opt/homebrew/bin/pnpm"
+elif command -v pnpm >/dev/null 2>&1; then
+  PNPM="pnpm"
+else
+  PNPM="corepack pnpm"
+fi
+GIT="git"
 
 mkdir -p "$LOG_DIR"
 
@@ -100,5 +115,9 @@ if ! $PNPM exec tsx scripts/upgrade-state.ts set >>"$LOG_FILE" 2>&1; then
 fi
 
 log "kicking $SERVICE"
-launchctl kickstart -k "gui/$(id -u)/$SERVICE" >>"$LOG_FILE" 2>&1
+if [ "$OS" = "Darwin" ]; then
+  launchctl kickstart -k "gui/$(id -u)/$SERVICE" >>"$LOG_FILE" 2>&1
+else
+  systemctl --user restart "$SERVICE" >>"$LOG_FILE" 2>&1
+fi
 log "deploy complete"
