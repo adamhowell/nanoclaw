@@ -26,6 +26,7 @@
 
 import WebSocket from 'ws';
 
+import { getMessagingGroupByPlatform } from '../db/messaging-groups.js';
 import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage, OutboundMessage } from './adapter.js';
@@ -54,6 +55,89 @@ type IncomingFile = {
   content_type: string;
   url: string;
 };
+
+const THREAD_CONTEXT_FETCH_TIMEOUT_MS = 5_000;
+const THREAD_CONTEXT_MESSAGE_LIMIT = 20;
+const THREAD_CONTEXT_CHAR_BUDGET = 8_000;
+
+/** wss://host/cable → https://host (the relay URL doubles as the API origin). */
+function apiOrigin(): string | null {
+  if (!RELAY_URL) return null;
+  try {
+    const u = new URL(RELAY_URL);
+    const proto = u.protocol === 'ws:' ? 'http:' : 'https:';
+    return `${proto}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Thread-context reinjection.
+ *
+ * When a user replies inside an hwm_app conversation that has no
+ * messaging_group yet — typically a thread opened by a scheduled-task
+ * session that has since ended — the router will auto-create a fresh
+ * messaging group and session with NO memory of the thread. The agent
+ * then can't even see the summary it posted two minutes earlier.
+ *
+ * Fix: detect the no-messaging-group case BEFORE routing and prepend
+ * the conversation transcript (fetched from hwm_app's agent_api using
+ * the relay token) so the first wake of the new session starts with
+ * the full thread in front of it. Existing threads with live sessions
+ * skip this entirely — their session transcript already has the
+ * history.
+ */
+async function fetchThreadContext(jid: string): Promise<string | null> {
+  const origin = apiOrigin();
+  if (!origin || !RELAY_TOKEN) return null;
+  const conversationId = jid.includes(':') ? jid.slice(jid.indexOf(':') + 1) : jid;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), THREAD_CONTEXT_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `${origin}/agent_api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${THREAD_CONTEXT_MESSAGE_LIMIT}`,
+      { headers: { Authorization: `Bearer ${RELAY_TOKEN}` }, signal: controller.signal },
+    );
+    if (!res.ok) {
+      log.warn('hwmapp: thread-context fetch failed', { jid, status: res.status });
+      return null;
+    }
+    const data = (await res.json()) as {
+      conversation?: { title?: string };
+      messages?: Array<{ role: string; content: string; created_at: string }>;
+    };
+    const msgs = data.messages || [];
+    if (msgs.length === 0) return null;
+
+    let budget = THREAD_CONTEXT_CHAR_BUDGET;
+    const lines: string[] = [];
+    // Newest-first while budgeting so the most recent turns survive, then
+    // restore chronological order for the prompt.
+    for (const m of [...msgs].reverse()) {
+      const line = `${m.role === 'user' ? 'User' : 'You (agent)'} [${m.created_at}]: ${m.content}`;
+      if (line.length > budget) break;
+      budget -= line.length;
+      lines.push(line);
+    }
+    lines.reverse();
+
+    const title = data.conversation?.title ? ` titled "${data.conversation.title}"` : '';
+    return (
+      `[Thread context — this message is a reply in an existing hwm_app conversation${title}. ` +
+      `Your session has no memory of it (the session that opened it has ended), so the earlier ` +
+      `messages are reproduced below. Messages marked "You (agent)" were posted by you — treat ` +
+      `their contents as your own prior statements and answer the user's reply in that context.]\n` +
+      lines.join('\n---\n')
+    );
+  } catch (err) {
+    log.warn('hwmapp: thread-context fetch errored', { jid, err });
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 type PendingNewConversation = {
   title: string;
@@ -253,6 +337,18 @@ function createAdapter(): HwmAppAdapter | null {
             (f) => `[Attached: ${f.filename} (${f.content_type}) — could not be downloaded; URL: ${f.url}]`,
           );
           text = text ? `${text}\n\n${lines.join('\n')}` : lines.join('\n');
+        }
+
+        // Thread-context reinjection: an unknown jid means the router is
+        // about to auto-create a fresh messaging group + session that has
+        // never seen this thread. Prepend the conversation transcript so
+        // the follow-up doesn't arrive context-free (see fetchThreadContext).
+        if (!getMessagingGroupByPlatform(CHANNEL_TYPE, jid)) {
+          const threadContext = await fetchThreadContext(jid);
+          if (threadContext) {
+            text = text ? `${threadContext}\n\n${text}` : threadContext;
+            log.info('hwmapp: injected thread context for new messaging group', { jid });
+          }
         }
 
         // Track pending message ID BEFORE handing to the router so deliver()
