@@ -20,7 +20,7 @@ his own browser.
 ## Endpoint
 
 ```
-HOST_BROWSER_URL = http://192.168.64.1:8765
+HOST_BROWSER_URL = http://host.docker.internal:8765
 ```
 
 (Set in your container env. Use `$HOST_BROWSER_URL` if available, else
