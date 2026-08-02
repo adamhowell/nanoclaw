@@ -1,158 +1,232 @@
 ---
 name: theachievemint-fulfill
-description: Process pending Achieve Mint orders end-to-end — match a front template, override the back template text per customer, render to verify layout, export laser-ready SVGs, drop them in the handoff outbox with sequential numbering, and mark items completed. ONLY use when Adam explicitly asks ("fulfill the queue" / "run fulfillment" / "process pending orders" / "process Sarah's order"). Never run autonomously — there is no scheduled trigger, and Etsy orders are not in this pipeline. If a related topic comes up in chat without an explicit ask, do not start the loop.
+description: Turn a custom Achieve Mint or Etsy coin order into engrave-ready SVGs on theachievemint.com and queue them for Adam to cut. Use when a new Etsy "You made a sale" email arrives for a personalizable coin, when Adam pastes or screenshots an order, or when he asks to build/queue/fulfill an order. Building and queueing are safe to do on your own; cutting, shipping, and replying to customers are not.
 ---
 
-# Achieve Mint — Order Fulfillment
+# Achieve Mint — build a custom coin and queue it
 
-End-to-end loop for turning a pending `FulfillmentItem` into two
-laser-ready SVGs (front + back) sitting in Adam's handoff folder. The
-backs are unique per order; the fronts usually match an existing
-template version exactly.
+Take an order, build the coin on theachievemint.com prod, and save the
+export onto the **engraving queue**. Adam works the queue and cuts.
 
-## What you have
+**The handoff folder is gone.** An earlier version of this skill wrote
+SVGs to `/workspace/extra/handoff_outbox/` with sequential numbering.
+Don't. Nothing you produce leaves the container as a file any more — it
+goes to the queue and shows up at
+`https://theachievemint.com/admin/engraving_queue`.
 
-Two env vars are pre-populated:
+## Credentials
 
 ```bash
-TAM_API_URL=https://theachievemint.com/api/v1
-TAM_API_TOKEN=axhQjmnfOFsbBixN__vzJI6tzARXEFHdV8A2KyFu7mE
+TAM=https://theachievemint.com/api/v1     # or $TAM_API_URL
+TAMK=$TAM_API_TOKEN                        # bearer; same key as the content API
+# Etsy sale emails live in hwm_app, not Gmail — see the hwm-api skill:
+#   $HWM_API_URL / $HWM_API_TOKEN
 ```
 
-(They may differ in the env — always read them from `$TAM_API_URL` /
-`$TAM_API_TOKEN` rather than hardcoding.)
+Read tokens from the environment; never paste them into chat.
 
-Task surface (`POST $TAM_API_URL/tasks` with `Authorization: Bearer
-$TAM_API_TOKEN`):
+---
 
-| task_type | when to use |
-|---|---|
-| `list_pending_fulfillment_items` | Pull the queue at the start of the loop |
-| `list_templates` | Browse the catalog when you need to find a matching front design |
-| `list_template_versions` | See what versions exist inside a template |
-| `inspect_template_version` | Read every text/image/shape element on a version before editing |
-| `update_text_area` | **In-place override** of a text area's content (synchronous SVG path regen) |
-| `render_template_version` | Get a PNG of the current state to visually verify layout |
-| `export_template_version` | Get the laser-ready SVG to drop in the handoff folder |
-| `mark_fulfillment_item_completed` | Close the item once both SVGs are in the outbox |
+## 1. Get the order
 
-**Critical: in-place override, never clone.** Adam keeps a small set
-of stable back-canvas versions and overwrites their text per order.
-Do NOT create new versions for each order — just call `update_text_area`
-on whichever back canvas applies, export, then move on. Next order
-overrides the same text areas again.
+### Etsy (most custom orders)
 
-## The handoff outbox
+Sale notifications land in **hwm_app**, from `transaction@etsy.com`,
+subject `You made a sale on Etsy - Ship by ... - [$X, Order #N]`.
 
-Drop final SVGs at `/workspace/extra/handoff_outbox/` inside your
-container. That path is bind-mounted to `~/nanoclaw/data/handoff_outbox/`
-on the Mini host (a separate sync job delivers from there to Adam's
-Mac `~/Desktop/_handoff`).
-
-**File naming**: Adam numbers sequentially across both sides. Read the
-current outbox listing, find the highest 3-digit prefix used so far
-(`005_back.svg` → 005 is the highest), and start numbering from N+1.
-A typical order writes two files in adjacent positions:
-```
-006_front.svg
-007_back.svg
-```
-Or just one file if the order only has one side. Always 3-digit
-zero-padded.
-
-Compute next number:
 ```bash
-HANDOFF=/workspace/extra/handoff_outbox
-NEXT=$(ls "$HANDOFF" 2>/dev/null | \
-  grep -oE '^[0-9]{3}' | sort -n | tail -1 | awk '{printf "%03d", $1+1}')
-NEXT=${NEXT:-001}
+curl -s -H "Authorization: Bearer $HWM_API_TOKEN" \
+  "$HWM_API_URL/emails/search?query=made%20a%20sale&limit=10"
+curl -s -H "Authorization: Bearer $HWM_API_TOKEN" "$HWM_API_URL/emails/EMAIL_ID"
 ```
 
-## The loop (per FulfillmentItem)
+The body carries everything you need to build:
 
-1. **Read item context.** From `list_pending_fulfillment_items` you have
-   `id`, `title`, `template_id`, `personalization_data` (jsonb with whatever
-   the customer entered — could be `name`, `sobriety_date`, `duration`,
-   `custom_back_text`, etc.). The shape varies; parse what's there.
+```
+Item: Any Year Mandala | Custom Personalizable Silver Sobriety Coin | ...
+With or without display case: Coin, small stand
+Personalization: FRONT: TWO YEARS FREE / BACK: 08.20.26
+You are the strongest and bravest human I know, my Person. Love, your Person
+Quantity: 1
+```
 
-2. **Front: match an existing version.**
-   - The item's `template_id` is the customer's chosen design. Call
-     `list_template_versions` on it.
-   - Most templates have multiple versions (e.g. a "mandala" template
-     with "Free", "Clean", "Sober", "One Year", "1 Year Sober", "Misc").
-     Pick the version whose title best matches the personalization
-     (e.g. `duration: "1 year"` + `program: "sober"` → "1 Year Sober").
-   - Call `export_template_version` with that version_id. The response
-     gives you `svg` (text), `svg_size_bytes`, dimensions.
-   - Write the SVG: `echo "$svg" > $HANDOFF/${NEXT}_front.svg`. Bump
-     NEXT for the next file.
+Three things to know about that email:
 
-3. **Back: override text in place.**
-   - Find the back-canvas version that matches this design family
-     (Adam will tell you which one — typically a known title like
-     "Back Canvas — Generic", or look in a "Back Canvases" folder).
-   - `inspect_template_version` to see what text areas exist. Each
-     has a `name` (e.g. "name_line", "duration_line", "message_top",
-     "message_bottom") plus current `default_text`, `font_family`,
-     `font_size`, `x`/`y`, `curve_radius` if curved.
-   - Map personalization fields onto text-area names with judgment.
-     The mapping is up to you — text area `name` is the strongest
-     signal, but if it's ambiguous, look at position + font size
-     (the prominent one is probably the headline).
-   - For each text area you need to change, call `update_text_area`
-     with `text_area_id` + `text`. Each call is synchronous — the
-     next render reflects the change.
+- **Personalization is multi-line.** It runs from the `Personalization:`
+  label down to the `Quantity:` line. Take all of it — the back message
+  is usually on the lines *after* the label, and stopping at the first
+  newline silently drops half the coin.
+- **There is no SKU.** Use the item title; it names the design ("Any Year
+  Mandala", "Pier at Night", "Flying Hawk Day and Night").
+- **It is a point-in-time snapshot.** Customers send changes afterwards as
+  Etsy conversations ("could you add the word *still*?"). Check messages
+  for the order before building. If Adam already replied agreeing to a
+  change, the change wins over the email.
 
-4. **Visual sanity check.**
-   - Call `render_template_version` with `width: 800`. Decode the
-     `png_base64`, save to `/tmp/check.png`, look at it.
-   - Check: does any text overflow the visible coin area? Is anything
-     clipped, off-center, or wrapping badly? Does the longest line
-     fit comfortably?
-   - If something's wrong, fix it: shrink `font_size` on the offending
-     text area, shorten the text, adjust `x`/`y`. Re-render. Iterate
-     up to ~3 times — if it still doesn't look right, stop and
-     iMessage Adam asking for help instead of pushing through.
+Only open Etsy in the browser for something the email doesn't have — a
+later message, a gift note, a personalization that looks truncated. The
+link is in the email (`etsy.com/your/orders/<n>`). Use the host-browser
+skill: that Chrome is Adam's real logged-in session and it is
+**read-only**. Never click anything that changes the order.
 
-5. **Export back + write file.**
-   - `export_template_version` on the back canvas → `svg` field.
-   - Write to `$HANDOFF/${NEXT}_back.svg` (NEXT is now the previous
-     front's number + 1).
+### The Achieve Mint
 
-6. **Mark completed.**
-   - `mark_fulfillment_item_completed` with the `fulfillment_item_id`
-     and `exported_svg` set to the BACK svg text (the dashboard shows
-     the back as the "exported" representation since it's the
-     custom one).
+TAM orders are in the site's own admin. Use the order number
+(`TAM-2026...`) as `order_ref` and also set `order_id`.
 
-7. **Move on.** Loop to the next item. If the queue is empty, send
-   Adam a brief iMessage summary (only if you processed at least one
-   order — silence is fine for an empty queue).
+---
 
-## Style notes
+## 2. Open the job first
 
-- **Don't over-edit text-area position fields** (x/y) unless rendering
-  actually shows a problem. Default placements are usually right —
-  trust the template designer, only nudge when the visual check
-  flags it.
-- **Don't change `font_family`** unless the customer asked for it.
-  Adam picks fonts per template intentionally.
-- **Don't touch image areas or shape areas** in this skill — those
-  are part of the design, not the personalization. If a request truly
-  needs a different icon, stop and ask Adam.
-- **Keep the iMessage summary short.** "Processed 3 orders, files 005–010
-  in the handoff folder" is plenty. No need to list each customer.
+Do this **before** building, so a half-finished order is still visible if
+you stop or fail.
 
-## When something blocks
+```bash
+curl -s -X POST -H "Authorization: Bearer $TAMK" -H "Content-Type: application/json" \
+  -d '{"channel":"etsy","order_ref":"4133361963","customer_name":"Megan Leonard",
+       "item_title":"Pier at Night | Custom Personalizable Silver Sobriety Coin",
+       "variation":"Coin only","ship_by":"2026-08-07",
+       "personalization":"Front: 2 months sober\nBack: One day at a time. 114"}' \
+  "$TAM/engraving_jobs"
+```
 
-- Multiple templates could match the front and you can't decide
-  → iMessage Adam with the order details + your top 2 candidates,
-  wait for him to pick.
-- Text won't fit no matter how you scale it → iMessage Adam with the
-  current PNG and the issue. Don't ship a clipped design.
-- `update_text_area` returns a validation error → stop, log the error,
-  iMessage Adam. Don't bypass.
+Safe to re-run — it is idempotent on `(channel, order_ref)` and updates
+rather than duplicating. Put anything Adam needs to know in `notes`: a
+change request, an ambiguity you resolved, a typo you fixed.
 
-The goal is laser-ready files in the handoff folder with Adam's eye on
-anything ambiguous. Better to skip an order and ask than ship one
-wrong.
+---
+
+## 3. Find the template
+
+```bash
+curl -s -H "Authorization: Bearer $TAMK" "$TAM/templates/folders"
+curl -s -H "Authorization: Bearer $TAMK" "$TAM/templates?folder=Starry%20Night"
+curl -s -H "Authorization: Bearer $TAMK" "$TAM/versions/VERSION_ID?geometry=true"
+curl -s -H "Authorization: Bearer $TAMK" "$TAM/versions/VERSION_ID/render?width=700" -o /tmp/coin.png
+```
+
+Match on the **item title**, not the SKU — product names and template
+names differ. Confirm by rendering a candidate and comparing it with the
+listing thumbnail rather than trusting the name.
+
+### Year tiers — the rule that matters
+
+Tier folders ("Any year mandala", "Starry Night") hold one template per
+milestone. Some designs carry a **rim breakdown** — `24 Months • 104
+Weeks • 730 Days • …` — hand-typed per year and baked into the layer.
+
+**Never fulfil one year on another year's template when the rim carries a
+breakdown.** Overwriting the centre does not fix the rim, and you would
+engrave the wrong month/week/day counts. If the tier doesn't exist that
+is work to do, not a substitution: **stop and tell Adam a new tier must
+be created.** Creating a Template still needs a prod runner — the API can
+create layers, but not templates or versions.
+
+`GET /skus/:sku/design` and `POST /skus/:sku/plan_text` encode this when a
+SKU is known; the resolver answers `must_create` rather than borrowing.
+Believe it.
+
+For designs with no breakdown (milestone words only), borrowing a tier
+whose label is the **same character length** is fine — the arc already fits.
+
+---
+
+## 4. Build it
+
+**Templates are scratchpads. Overwrite text in place; never clone.** Adam
+reuses the same templates every order and keeps no copies, so replacing
+existing text is always correct and never needs permission.
+
+```bash
+curl -s -X PATCH -H "Authorization: Bearer $TAMK" -H "Content-Type: application/json" \
+  -d '{"text":"Two\nYears\nFree","font_size":44,"line_height":1.1}' "$TAM/layers/LAYER_ID"
+```
+
+### Centring
+
+- **Straight text** — `POST $TAM/layers/:id/center` with
+  `{"vertical":"optical"}`. It converges.
+- **Curved text** (`curved_top` / `curved_bottom` / `circle`) — **do not
+  call center.** `LayerGeometry` cannot measure curved layers: `measured`
+  comes back `0x0`, and centring on that has thrown `x` to −887 and
+  wrecked a template. Centre it by measuring the render instead: render
+  the version, PATCH the text to `"."`, render again, diff the two
+  images — the changed-pixel box is the glyphs. Then
+  `new_x = x + (250 − ink_centre_x)`, two or three passes to converge.
+  Flatten renders with `-background white`; they are ink-on-transparent
+  and compositing onto black gives a silently empty diff.
+
+### Sizing — fill the medallion
+
+Adam's standing correction: **use the biggest font that fits.** Only go
+small when nothing else will work.
+
+- The binding constraint is the **longest line**, so re-wrapping into
+  more, shorter lines usually lets the type get *bigger*. Adding a line
+  is a win, not a compromise.
+- Break mid-phrase if it shortens the longest line. Legible size beats
+  tidy phrasing.
+- Width budget depends on the design: a plain back takes ~380 canvas
+  units; a back bounded by a rim or inner circle is limited by that
+  circle — measure it (moon ≈ 194, mandala ≈ 168 radius).
+- Decorative art inside the medallion (moons, stars) is a constraint the
+  geometry can't see. **Zoom the render at the tight edge** before
+  accepting a fit.
+
+### Look at it
+
+Render at `width=700` or more and actually view the PNG before saving.
+Check for overflow, collision with artwork, a gap or collision at a ring's
+seam, clipped descenders. Iterate up to about three times; if it still
+isn't right, stop and ask rather than queueing a bad coin.
+
+---
+
+## 5. Save to the queue
+
+One saved version per side. This **snapshots the export** — the bytes are
+frozen, so a later order overwriting the scratchpad cannot change what
+Adam cuts.
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TAMK" -H "Content-Type: application/json" \
+  -d '{"version_id":"TEMPLATE_VERSION_UUID","label":"Front"}' \
+  "$TAM/engraving_jobs/JOB_ID/saved_versions"
+```
+
+Use `{"svg":"...","filename":"..."}` only for something not built from a
+template. Deleting a saved version removes just that file — the template
+is untouched — so a bad save is cheap to redo.
+
+Confirm `"ready": true` on the job when you're done.
+
+---
+
+## 6. Report
+
+One short iMessage per batch: what you queued, and anything Adam must
+decide.
+
+> Queued 3 — Etsy 4133361963, 4133113853, TAM-20260801-TF9D3A.
+> 4132530064 needs a 48-year Starry Night tier created first.
+
+Don't list every field. Silence is fine when there was nothing to do.
+
+---
+
+## Stop and ask when
+
+- The year tier doesn't exist on a design whose rim carries a breakdown.
+- Two designs could plausibly match the item title.
+- The text won't fit at a legible size however you wrap it.
+- The personalization is ambiguous, contradictory, or looks truncated.
+- The customer asked for a change and you can't tell whether Adam agreed.
+- A PATCH returns a validation error. Don't work around it.
+
+## Never
+
+- Write files to a handoff folder — that flow is retired.
+- Clone a template or version to "preserve" the old text.
+- Call `center` on curved text.
+- Message the customer, mark anything shipped, or touch prices.
+- Click anything in Adam's Etsy session. It is read-only.
