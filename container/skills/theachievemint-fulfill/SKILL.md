@@ -96,6 +96,50 @@ change request, an ambiguity you resolved, a typo you fixed.
 
 ---
 
+## 2b. Which kind of coin is this?
+
+Three kinds come through, and only one of them is a template job. Decide
+before you go looking for a design, because two of them have no design to
+find and looking anyway is how the wrong coin gets built.
+
+**Fully custom** — SKU `TAM-FCU-SCOI-2C`, or a title beginning "Fully
+Custom Sobriety Coin". Adam draws these in Accomplice; there is no
+template and there never will be. Create the job with
+`"fully_custom": true` and **stop there**. Do not pick a template that
+looks close. The queue shows it as waiting on artwork, Adam uploads the
+SVG, and that is the whole flow.
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TAMK" -H "Content-Type: application/json" \
+  -d '{"channel":"etsy","order_ref":"4138341893","customer_name":"Zoe Black",
+       "item_title":"Fully Custom Sobriety Coin | Your Design, Your Words",
+       "sku":"TAM-FCU-SCOI-2C","fully_custom":true,"ship_by":"2026-08-14",
+       "personalization":"Front: One Day at a Time ... / Back: ..."}' \
+  "$TAM/engraving_jobs"
+```
+
+Put the whole personalization on the job even though nothing builds from
+it — it is the brief Adam draws from. If the customer attached pictures,
+say so in `notes`; TAM orders carry them as `front_image_image_id` /
+`back_image_image_id` on the order item, and Etsy ones arrive as
+attachments or messages.
+
+**A token with a personalized message** — SKU ending `-TOK`, title
+"... sobriety token", and a `Personalized message on back` line. The
+front is stock. Build **only the back**, from the **Token** template
+(one template, one version, a single centred text layer). Short messages:
+"Proud of you!", a name, a date. Set that layer to the customer's words
+and snapshot it as the back. A token with no personalized message needs
+no engraving at all — don't make a job for it.
+
+**Everything else** is a template coin: carry on to section 3.
+
+A plain stock coin with no personalization (`TAM-SOB-04YR-COI` and the
+like, no `Personalization:` line) is picked off a shelf. It does not
+belong in this queue.
+
+---
+
 ## 3. Find the template
 
 ```bash
