@@ -268,9 +268,24 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
 
+    // A scheduled run is a job, not a conversation.
+    //
+    // Everything these tasks carry between runs lives somewhere durable — a
+    // queue, an API, a file — and the prompts say so: "the next run will pick
+    // up where you left off" means the queue, not the transcript. Resuming
+    // buys nothing and costs plenty. The Sposedly collection fires forty eight
+    // times a day, so five days of runs piled into one conversation and it
+    // compacted on almost every one. Then a compaction produced a summary the
+    // model would not resume, and eighteen hours of nothing followed.
+    //
+    // Only when the whole batch is task messages, so a session that also
+    // carries a chat keeps its thread.
+    const resuming = routing.taskRun ? undefined : continuation;
+    if (routing.taskRun && continuation) log('Task run — starting fresh rather than resuming');
+
     const query = config.provider.query({
       prompt,
-      continuation,
+      continuation: resuming,
       cwd: config.cwd,
       systemContext: config.systemContext,
     });
@@ -290,10 +305,13 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         config.providerName,
         config.provider.onExchangeComplete?.bind(config.provider),
         prompt,
-        continuation,
+        resuming,
       );
       endedIdle = result.endedIdle;
-      if (result.continuation && result.continuation !== continuation) {
+      // A task run's continuation is not kept: the next run starts fresh, and
+      // storing it would leave a row nothing reads pointing at a conversation
+      // nothing resumes.
+      if (!routing.taskRun && result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
         setContinuation(config.providerName, continuation);
       }
@@ -305,11 +323,11 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       // Stale/corrupt continuation recovery: ask the provider whether
       // this error means the stored continuation is unusable, and clear
       // it so the next attempt starts fresh.
-      if (continuation && config.provider.isSessionInvalid(err)) {
+      if (resuming && config.provider.isSessionInvalid(err)) {
         log(`Stale session detected (${continuation}) — clearing for next retry`);
         continuation = undefined;
         clearContinuation(config.providerName);
-      } else if (continuation) {
+      } else if (resuming) {
         // Not a missing session, so the provider cannot tell us it is
         // unusable. A conversation that fails this many turns running is
         // unusable anyway, whatever the reason, and carrying on from it is
@@ -577,7 +595,10 @@ export async function processQuery(
         // container died between `init` and `result`, the SDK session was
         // effectively orphaned and the next message started a blank
         // Claude session with no prior context.
-        setContinuation(providerName, event.continuation);
+        //
+        // Except on a scheduled run, which starts fresh whatever is on file,
+        // so the row would only ever point at a conversation nothing resumes.
+        if (!routing.taskRun) setContinuation(providerName, event.continuation);
       } else if (event.type === 'result') {
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see

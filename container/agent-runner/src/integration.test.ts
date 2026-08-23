@@ -23,6 +23,15 @@ afterEach(() => {
   closeSessionDb();
 });
 
+function insertTask(id: string, prompt: string) {
+  getInboundDb()
+    .prepare(
+      `INSERT INTO messages_in (id, kind, timestamp, status, thread_id, content)
+       VALUES (?, 'task', datetime('now'), 'pending', 'system:tasks:ser-1', ?)`,
+    )
+    .run(id, JSON.stringify({ prompt }));
+}
+
 function insertMessage(id: string, content: object, opts?: { platformId?: string; channelType?: string; threadId?: string }) {
   getInboundDb()
     .prepare(
@@ -617,3 +626,53 @@ class BlockingProvider {
     };
   }
 }
+
+// A scheduled run is a job, not a conversation. Everything these tasks carry
+// between runs lives in a queue or an API, so resuming the last one buys
+// nothing: the Sposedly collection fires forty eight times a day, piled five
+// days into one conversation, compacted on almost every run, and one of those
+// compactions produced a summary the model would not resume.
+describe('poll loop — scheduled runs start fresh', () => {
+  it('does not resume the last run, and keeps no continuation of its own', async () => {
+    setContinuation('mock', 'conversation-from-a-previous-run');
+    insertTask('t1', 'Work the queue');
+
+    const seen: Array<string | undefined> = [];
+    const provider = new MockProvider({}, () => 'done');
+    const query = provider.query.bind(provider);
+    provider.query = (input) => {
+      seen.push(input.continuation);
+      return query(input);
+    };
+
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    loopPromise.catch(() => {});
+    await waitFor(() => seen.length > 0, 2000);
+    controller.abort();
+
+    expect(seen[0]).toBeUndefined();
+    expect(getContinuation('mock')).toBe('conversation-from-a-previous-run');
+  });
+
+  it('a chat still resumes where it left off', async () => {
+    setContinuation('mock', 'an-ongoing-chat');
+    insertMessage('m1', { sender: 'Adam', text: 'carry on' }, { platformId: 'chan-1', channelType: 'discord', threadId: 'thread-1' });
+
+    const seen: Array<string | undefined> = [];
+    const provider = new MockProvider({}, () => '<message to="discord-test">ok</message>');
+    const query = provider.query.bind(provider);
+    provider.query = (input) => {
+      seen.push(input.continuation);
+      return query(input);
+    };
+
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+    loopPromise.catch(() => {});
+    await waitFor(() => seen.length > 0, 2000);
+    controller.abort();
+
+    expect(seen[0]).toBe('an-ongoing-chat');
+  });
+});
