@@ -10,7 +10,12 @@ import fs from 'fs';
 import path from 'path';
 
 import { findByName, getAllDestinations } from '../destinations.js';
-import { getMessageIdBySeq, getRoutingBySeq, writeMessageOut } from '../db/messages-out.js';
+import {
+  findRecentIdenticalSend,
+  getMessageIdBySeq,
+  getRoutingBySeq,
+  writeMessageOut,
+} from '../db/messages-out.js';
 import { getCurrentInReplyTo } from '../db/session-state.js';
 import { getSessionRouting } from '../db/session-routing.js';
 import { registerTools } from './server.js';
@@ -67,6 +72,14 @@ function resolveRouting(
   return { channel_type: 'agent', platform_id: dest.agentGroupId!, thread_id: null, resolvedName: to };
 }
 
+/**
+ * How long a repeat of the same words to the same place counts as the same
+ * message rather than a new one. Long enough to cover the model saying it
+ * twice a second or two apart, short enough that deliberately saying the same
+ * thing again later still goes.
+ */
+const SAME_MESSAGE_WINDOW_MS = 90_000;
+
 export const sendMessage: McpToolDefinition = {
   tool: {
     name: 'send_message',
@@ -92,6 +105,21 @@ export const sendMessage: McpToolDefinition = {
     const routing = resolveRouting(to);
     if ('error' in routing) return err(routing.error);
 
+    const content = JSON.stringify({ text });
+    const already = findRecentIdenticalSend(
+      {
+        content,
+        platform_id: routing.platform_id,
+        channel_type: routing.channel_type,
+        thread_id: routing.thread_id,
+      },
+      SAME_MESSAGE_WINDOW_MS,
+    );
+    if (already !== null) {
+      log(`send_message: same text already sent as #${already}, not sending again`);
+      return ok(`Already sent to ${routing.resolvedName} moments ago (id: ${already}). Not sent twice.`);
+    }
+
     const id = generateId();
     const seq = writeMessageOut({
       id,
@@ -100,7 +128,7 @@ export const sendMessage: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
-      content: JSON.stringify({ text }),
+      content,
     });
 
     log(`send_message: #${seq} → ${routing.resolvedName}`);

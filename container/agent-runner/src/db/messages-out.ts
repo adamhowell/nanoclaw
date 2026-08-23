@@ -88,6 +88,45 @@ export function writeMessageOut(msg: WriteMessageOut): number {
  * Instead, look up the platform_message_id from the delivered table (host writes this
  * after successful delivery).
  */
+/**
+ * A send this session already made, with the same words to the same place,
+ * within the window.
+ *
+ * The model occasionally calls send_message twice for one reply — not in the
+ * same turn, but a second or two later, having already been told the first
+ * one went. Eleven times since the 5th of August, mostly a bare "SKIP" but
+ * twice this morning with a real answer, and the person on the other end sees
+ * it said the same thing twice.
+ *
+ * Matched on content and destination rather than deduplicated at delivery,
+ * because two identical rows are already two messages by then.
+ */
+export function findRecentIdenticalSend(
+  msg: Pick<WriteMessageOut, 'content' | 'platform_id' | 'channel_type' | 'thread_id'>,
+  withinMs: number,
+): number | null {
+  const since = new Date(Date.now() - withinMs).toISOString();
+  const row = getOutboundDb()
+    .prepare(
+      `SELECT seq FROM messages_out
+       WHERE content = $content
+         AND timestamp >= $since
+         AND IFNULL(platform_id, '') = IFNULL($platform_id, '')
+         AND IFNULL(channel_type, '') = IFNULL($channel_type, '')
+         AND IFNULL(thread_id, '') = IFNULL($thread_id, '')
+       ORDER BY seq DESC LIMIT 1`,
+    )
+    .get({
+      $content: msg.content,
+      $since: since,
+      $platform_id: msg.platform_id ?? null,
+      $channel_type: msg.channel_type ?? null,
+      $thread_id: msg.thread_id ?? null,
+    }) as { seq: number } | undefined;
+
+  return row ? row.seq : null;
+}
+
 export function getMessageIdBySeq(seq: number): string | null {
   const inbound = getInboundDb();
 

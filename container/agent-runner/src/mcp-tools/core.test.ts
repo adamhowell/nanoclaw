@@ -74,3 +74,39 @@ describe('send_message MCP tool — in_reply_to plumbing', () => {
     expect(out[0].in_reply_to).toBeNull();
   });
 });
+
+// The model occasionally calls send_message twice for one reply, a second or
+// two apart, having already been told the first went. Adam saw Burnie answer
+// him twice over iMessage; eleven of these since the 5th of August.
+describe('send_message MCP tool — saying the same thing twice', () => {
+  it('sends once when the same text goes to the same place twice', async () => {
+    await sendMessage.handler({ to: 'peer', text: 'the coin is already shipped' });
+    const second = (await sendMessage.handler({
+      to: 'peer',
+      text: 'the coin is already shipped',
+    })) as { content: Array<{ text: string }> };
+
+    expect(getUndeliveredMessages()).toHaveLength(1);
+    expect(second.content[0].text).toMatch(/[Aa]lready sent/);
+  });
+
+  it('says which message it was, so the agent can still edit it', async () => {
+    const first = (await sendMessage.handler({ to: 'peer', text: 'hello' })) as {
+      content: Array<{ text: string }>;
+    };
+    const again = (await sendMessage.handler({ to: 'peer', text: 'hello' })) as {
+      content: Array<{ text: string }>;
+    };
+
+    const id = first.content[0].text.match(/id: (\d+)/)?.[1];
+    expect(id).toBeTruthy();
+    expect(again.content[0].text).toContain(`id: ${id}`);
+  });
+
+  it('lets different words through', async () => {
+    await sendMessage.handler({ to: 'peer', text: 'hello' });
+    await sendMessage.handler({ to: 'peer', text: 'goodbye' });
+
+    expect(getUndeliveredMessages()).toHaveLength(2);
+  });
+});
