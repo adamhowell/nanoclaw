@@ -12,6 +12,21 @@ require "json"
 require "fileutils"
 require "open3"
 require "time"
+require "timeout"
+
+# osascript can block indefinitely: a modal dialog in Messages, or anything
+# that drags in xcrun and lands on an unaccepted Xcode licence. This script is
+# one-shot and launchd will not start a second instance while one is alive, so
+# a single hung send silently stops every message from then on. That is exactly
+# what happened on 2026-08-05 — six days of outage with nothing in the log,
+# because the process never reached a line that logs.
+SEND_TIMEOUT = 60
+
+# A crash between claiming a file and finishing with it leaves a .claimed-<pid>
+# behind. It no longer matches the *.json glob, so the message becomes
+# invisible and is never retried. One from 2026-06-06 sat unnoticed for two
+# months.
+CLAIM_STALE_AFTER = 900
 
 HOME    = ENV["HOME"] || Dir.home
 OUTBOX  = File.join(HOME, "nanoclaw/data/imessage_outbox")
@@ -37,12 +52,26 @@ def send_imessage(to, body)
       send "#{safe_body}" to targetBuddy
     end tell
   APPLESCRIPT
-  out, err, status = Open3.capture3("osascript", "-e", script)
+  out, err, status = capture_with_timeout(script)
+  return false if status.nil?
+
   unless status.success?
     log("[error] osascript failed for #{to}: #{err.strip}")
     return false
   end
   true
+end
+
+# Returns [out, err, status]; status is nil when the call had to be killed.
+def capture_with_timeout(script)
+  Timeout.timeout(SEND_TIMEOUT) do
+    Open3.capture3("osascript", "-e", script)
+  end
+rescue Timeout::Error
+  # Reap the straggler, or the next run inherits the same wedge.
+  system("pkill", "-9", "-x", "osascript", out: File::NULL, err: File::NULL)
+  log("[error] osascript exceeded #{SEND_TIMEOUT}s and was killed. Check Messages.app for a modal dialog, and `git --version` for an xcrun/Xcode-licence hang.")
+  [ nil, nil, nil ]
 end
 
 def send_imessage_attachment(to, attachment_path)
@@ -61,12 +90,37 @@ def send_imessage_attachment(to, attachment_path)
       send POSIX file "#{safe_path}" to targetBuddy
     end tell
   APPLESCRIPT
-  out, err, status = Open3.capture3("osascript", "-e", script)
+  out, err, status = capture_with_timeout(script)
+  return false if status.nil?
+
   unless status.success?
     log("[error] osascript attachment failed for #{to}: #{err.strip}")
     return false
   end
   true
+end
+
+# Recover anything a dead run left claimed. A claim whose owning pid is gone,
+# or that is simply older than any plausible send, belongs back in the queue.
+Dir.glob(File.join(OUTBOX, "*.json.claimed-*")).each do |orphan|
+  begin
+    pid = orphan[/\.claimed-(\d+)\z/, 1].to_i
+    owner_alive =
+      begin
+        pid.positive? && Process.kill(0, pid) && true
+      rescue Errno::ESRCH
+        false
+      rescue Errno::EPERM
+        true
+      end
+    next if owner_alive && (Time.now - File.mtime(orphan)) < CLAIM_STALE_AFTER
+
+    restored = orphan.sub(/\.claimed-\d+\z/, "")
+    File.rename(orphan, restored)
+    log("[recovered] #{File.basename(restored)} was claimed by dead pid #{pid} - requeued")
+  rescue => e
+    log("[error] could not recover #{File.basename(orphan)}: #{e.class}: #{e.message}")
+  end
 end
 
 Dir.glob(File.join(OUTBOX, "*.json")).sort.each do |path|
