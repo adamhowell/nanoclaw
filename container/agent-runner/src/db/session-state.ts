@@ -76,6 +76,36 @@ export function setContinuation(providerName: string, id: string): void {
 
 export function clearContinuation(providerName: string): void {
   deleteValue(continuationKey(providerName));
+  clearContinuationFailures(providerName);
+}
+
+/**
+ * How many turns in a row have failed on the continuation we are holding.
+ *
+ * A continuation can go bad in two ways. It can go missing, which the
+ * provider recognises from the error text and the runner already handles.
+ * Or it can still exist and be refused every single time — a turn somewhere
+ * back in the conversation that the model will no longer resume, so every
+ * attempt to carry on from it dies the same way.
+ *
+ * The second kind is invisible from one error. It only shows up as the same
+ * failure over and over: the Sposedly collection task hit one on 22 August,
+ * two seconds after a compaction, and then failed every half hour for
+ * eighteen hours with nobody any the wiser. Counting the failures is what
+ * tells the two kinds apart.
+ */
+function failureKey(providerName: string): string {
+  return `continuation_failures:${providerName.toLowerCase()}`;
+}
+
+export function countContinuationFailure(providerName: string): number {
+  const next = Number(getValue(failureKey(providerName)) ?? 0) + 1;
+  setValue(failureKey(providerName), String(next));
+  return next;
+}
+
+export function clearContinuationFailures(providerName: string): void {
+  deleteValue(failureKey(providerName));
 }
 
 /**

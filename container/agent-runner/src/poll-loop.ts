@@ -10,6 +10,8 @@ import { writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
 import {
   clearContinuation,
+  clearContinuationFailures,
+  countContinuationFailure,
   clearCurrentInReplyTo,
   migrateLegacyContinuation,
   setContinuation,
@@ -28,6 +30,13 @@ import { isUploadTraceCommand, uploadTrace } from './upload-trace.js';
 import type { AgentProvider, AgentQuery, ProviderEvent, ProviderExchange } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
+
+/**
+ * Turns in a row that have to fail before the conversation itself is treated
+ * as the problem. Three, because a run every half hour then loses ninety
+ * minutes rather than the eighteen hours it took somebody to notice.
+ */
+const CONTINUATION_FAILURE_LIMIT = 3;
 const ACTIVE_POLL_INTERVAL_MS = 500;
 // Stand down (exit cleanly, code 0) after this long with no actionable work.
 // The host sweep re-spawns a fresh container the moment the next due message
@@ -288,6 +297,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         continuation = result.continuation;
         setContinuation(config.providerName, continuation);
       }
+      clearContinuationFailures(config.providerName);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Query error: ${errMsg}`);
@@ -299,6 +309,17 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         log(`Stale session detected (${continuation}) — clearing for next retry`);
         continuation = undefined;
         clearContinuation(config.providerName);
+      } else if (continuation) {
+        // Not a missing session, so the provider cannot tell us it is
+        // unusable. A conversation that fails this many turns running is
+        // unusable anyway, whatever the reason, and carrying on from it is
+        // the one thing guaranteed not to work.
+        const failures = countContinuationFailure(config.providerName);
+        if (failures >= CONTINUATION_FAILURE_LIMIT) {
+          log(`${failures} turns in a row failed on ${continuation} — starting fresh next turn`);
+          continuation = undefined;
+          clearContinuation(config.providerName);
+        }
       }
 
       // Write error response so the user knows something went wrong

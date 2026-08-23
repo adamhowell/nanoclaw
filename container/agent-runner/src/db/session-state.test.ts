@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { getOutboundDb, initTestSessionDb } from './connection.js';
 import {
   clearContinuation,
+  clearContinuationFailures,
+  countContinuationFailure,
   getContinuation,
   migrateLegacyContinuation,
   setContinuation,
@@ -96,5 +98,40 @@ describe('session-state — legacy migration', () => {
 
     const second = migrateLegacyContinuation('claude');
     expect(second).toBe('once');
+  });
+});
+
+// A continuation can go missing, which the provider recognises from the error
+// text, or it can still exist and be refused every single time. The second
+// kind only shows up as the same failure over and over: the Sposedly
+// collection task hit one two seconds after a compaction and then failed every
+// half hour for eighteen hours.
+describe('session-state — a conversation that keeps failing', () => {
+  test('counts up, per provider', () => {
+    expect(countContinuationFailure('claude')).toBe(1);
+    expect(countContinuationFailure('claude')).toBe(2);
+    expect(countContinuationFailure('codex')).toBe(1);
+    expect(countContinuationFailure('Claude')).toBe(3);
+  });
+
+  test('a turn that works wipes the count', () => {
+    countContinuationFailure('claude');
+    countContinuationFailure('claude');
+    clearContinuationFailures('claude');
+
+    expect(countContinuationFailure('claude')).toBe(1);
+  });
+
+  // Otherwise a fresh conversation inherits the dead one's tally and gets
+  // thrown away three turns early.
+  test('dropping the continuation drops its tally with it', () => {
+    setContinuation('claude', 'conv-1');
+    countContinuationFailure('claude');
+    countContinuationFailure('claude');
+
+    clearContinuation('claude');
+
+    expect(getContinuation('claude')).toBeUndefined();
+    expect(countContinuationFailure('claude')).toBe(1);
   });
 });
