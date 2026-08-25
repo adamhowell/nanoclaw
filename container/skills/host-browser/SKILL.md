@@ -121,8 +121,10 @@ Response:
 Parameters:
 - `url` (required) — the page to load.
 - `extract` — `"text"` (default, plain visible text), `"html"` (full
-  HTML), or `"markdown"` (lightweight markdown rendering with links
-  preserved).
+  HTML), or `"markdown"` (the visible text, with every link as
+  `[text](href)` and every picture as `![alt](src)`. This is how you get
+  a photo's address or an id that only lives in a link, without touching
+  markup).
 - `waitFor` — optional CSS selector to wait for before extracting.
   Use this when the page renders the content you want via JS after
   initial load. Example: `".message-thread-list"` for an Etsy

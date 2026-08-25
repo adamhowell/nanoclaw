@@ -169,6 +169,25 @@ Adam gets morning (6 AM ET) and evening (6 PM ET) briefings. When generating one
 
 ---
 
+## Texting Adam — when you are stuck
+
+If something stops you working, text him. Do not stop and wait to be noticed.
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $HWM_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Sposedly collection is blocked: 438 tasks waiting, and I need a ruling on X before I read another shop."}' \
+  https://app.hardworkmontage.com/api/v1/texts
+```
+
+One line, no attachments, cut at a thousand characters. This is the only route
+you have to his phone — every in-app destination is a chat panel he may not be
+looking at. A Sposedly question once sat in one for thirty hours while the
+queue grew to 438 tasks and nothing read a shop.
+
+Texting him is not a reason to stop. Say what is wrong, take the conservative
+path, and keep working.
+
 ## Voice Calls — calling Adam directly (Phase 1: dial + iMessage fallback)
 
 You can place an actual phone call to Adam through the HWM API. This is for
