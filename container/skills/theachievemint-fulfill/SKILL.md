@@ -112,11 +112,19 @@ SVG, and that is the whole flow.
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TAMK" -H "Content-Type: application/json" \
   -d '{"channel":"etsy","order_ref":"4138341893","customer_name":"Zoe Black",
+       "customer_email":"zoe.black@gmail.com",
        "item_title":"Fully Custom Sobriety Coin | Your Design, Your Words",
        "sku":"TAM-FCU-SCOI-2C","fully_custom":true,"ship_by":"2026-08-14",
        "personalization":"Front: One Day at a Time ... / Back: ..."}' \
   "$TAM/engraving_jobs"
 ```
+
+**A fully custom coin needs the buyer's email.** The proof goes to it, and
+it becomes their account on theachievemint.com. The sale email doesn't
+carry it; the Etsy order page does, under the buyer's name. Open the
+order page through the host-browser (read-only, as above), copy the
+address exactly, and send it as `customer_email`. No email means Adam
+has to go find it before the proof can go out.
 
 Put the whole personalization on the job even though nothing builds from
 it — it is the brief Adam draws from. If the customer attached pictures,
