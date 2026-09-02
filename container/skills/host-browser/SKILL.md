@@ -153,6 +153,63 @@ curl -s -X POST "$HOST_BROWSER_URL/click" \
   }'
 ```
 
+### Type into a form and save it
+
+Two routes type with real keystrokes into Adam's logged-in Chrome. They
+are what the Etsy support auto-reply uses, and as of 2026-09-02 they are
+how listing descriptions get updated on Etsy. Only use them on a page and
+a field you have been asked to change; never on anything that moves an
+order or sends money.
+
+`/fill` types into one or more fields and leaves the page open. Each
+field is a CSS selector plus the text. A visible field is clicked,
+cleared, and typed into key by key; a field the editor keeps hidden until
+a section is expanded is set through its native setter. It does NOT
+click any save button, so follow it with `/click` on the save control.
+
+```bash
+curl -s -X POST "$HOST_BROWSER_URL/fill" \
+  -H "X-Auth: $HOST_BROWSER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.etsy.com/your/shops/me/tools/listings/123456789",
+    "fields": [ { "selector": "textarea[name=\"description\"]", "text": "The whole description, newlines as \\n" } ],
+    "wait_ms": 1500
+  }'
+```
+
+`/type_and_submit` types into one field and clicks a submit control in
+the same call, with retries if a modal lands between the two. Use it for
+a message box with its own Send button. `dismiss_selector` is optional
+and names a control to click away first (Etsy's survey popup).
+
+```bash
+curl -s -X POST "$HOST_BROWSER_URL/type_and_submit" \
+  -H "X-Auth: $HOST_BROWSER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.etsy.com/messages/123",
+    "type_selector": "textarea.reply",
+    "text": "Thanks, it shipped today.",
+    "submit_selector": "button[type=submit]",
+    "wait_ms": 2000
+  }'
+```
+
+Both share the sticky tab with `/fetch`, `/click` and `/screenshot`, so
+the order is: `/fetch` or `/screenshot` the edit page, `/fill` the field,
+`/click` Save, `/screenshot` again to confirm it took. Finding the
+field's selector is the one time reading the page HTML is fine: one
+`/fetch` with `"extract": "html"` of the edit page, look for the
+textarea or input by its name or label, and then throw the HTML away.
+Selectors are for the field you are typing into, nothing else.
+
+A `429` with `"blocked": true` means the service is cooling that host
+off or its budget for the day is spent. Do not retry until
+`retry_after_s` has passed. Work in small batches with a pause between
+listings, the way a person would, and stop for the day if you get
+blocked twice.
+
 ### Screenshot a page
 
 Use this when you need to *show* the user what a page looked like
