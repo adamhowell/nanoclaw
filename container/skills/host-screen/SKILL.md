@@ -76,9 +76,13 @@ and a click aimed at a stale picture lands on the wrong thing.
 
 1. Click inside the field.
 2. `keys: ["cmd+a"]` to select everything in it.
-3. `type` the new text. The paste replaces the selection.
+3. `type` the new text with `"method":"keys"`. **Etsy's listing description
+   field ignores a paste** (found 2026-09-02: the paste-style type reported
+   ok and the field did not change, while key-by-key registered as a real
+   unsaved edit). Paste is fine for the address bar and plain inputs.
 4. Screenshot. Read the first line and the last line of what is now in the
-   field and check they match what you sent.
+   field and check they match what you sent. If characters went missing,
+   discard the change and tell Adam rather than saving a garbled listing.
 
 ## Going to a page
 
