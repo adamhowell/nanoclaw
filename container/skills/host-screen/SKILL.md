@@ -97,8 +97,10 @@ Say so to Adam when that happens; do not try to click through it.
 ## Scrolling
 
 There is no scroll action. Use `keys: ["page-down"]` or `["arrow-down"]`
-with the page focused (click on empty page background first, never on a
-field), or drag the scrollbar. Screenshot after each scroll.
+with the page focused, or drag the scrollbar. **Click on empty page
+background first, never with a field focused**: a page-up sent while the
+description field held a selection replaced the whole description with
+nothing (trial two, 2026-09-02). Screenshot after each scroll.
 
 ## Rules
 
