@@ -155,6 +155,14 @@ curl -s -X POST "$HOST_BROWSER_URL/click" \
 
 ### Type into a form and save it
 
+**For any edit on etsy.com, use the `host-screen` skill instead.** Its
+`/screen` route looks at the Mini's display and clicks and types like a
+person, on one live page. The two routes below reload the page between the
+typing and the save on Etsy's listing editor, so the edit is lost and Save
+never enables (2026-09-02). They still work for a message box with its own
+Send button, which is what the support auto-reply uses.
+
+
 Two routes type with real keystrokes into Adam's logged-in Chrome. They
 are what the Etsy support auto-reply uses, and as of 2026-09-02 they are
 how listing descriptions get updated on Etsy. Only use them on a page and
