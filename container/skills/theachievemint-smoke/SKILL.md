@@ -1,13 +1,17 @@
 ---
 name: theachievemint-smoke
-description: Click through The Achieve Mint's golden-path checkout on the live site (add one coin of each form shape to the cart, then address, shipping, payment page) and text Adam whether it passed. Use when a message starts with [CHECKOUT SMOKE], after a theachievemint.com deploy, or when Adam asks whether the store still works. Never completes a payment.
+description: Click through The Achieve Mint's golden-path checkout on the live site (add one coin of each form shape to the cart, then address, shipping, payment page) and report in one line whether it passed. Use when a message starts with [CHECKOUT SMOKE], after a theachievemint.com deploy, or when Adam asks whether the store still works. Never completes a payment.
 ---
 
 # Achieve Mint — checkout smoke test
 
 The host-browser service on the Mini runs the whole walk in its own
 headless Chrome and hands back a JSON report. You call it, read the
-report, and text Adam one line. You do not click anything yourself.
+report, and reply with one line. You do not click anything yourself.
+
+The reply is the report. It lands in the hwm_app chat conversation the
+request came from ("Deploys"). Never text or iMessage Adam about a smoke
+result; he asked for these to stay out of his texts (2026-09-15).
 
 ```bash
 curl -sS -X POST "$HOST_BROWSER_URL/smoke" \
@@ -33,7 +37,7 @@ shows a Stripe client secret. It stops there. Nothing is bought.
 
 1. If it failed, run it ONCE more before saying anything. Shippo and
    Stripe have slow moments and one retry clears most of those.
-2. Text Adam ONE line, plain text, no markdown:
+2. Reply with ONE line, plain text, no markdown:
    - pass: `✅ theachievemint checkout smoke passed after deploy abc1234 (7 steps, 58s)`
    - fail: `❌ theachievemint checkout smoke FAILED after deploy abc1234 at "add: token, engraving box left off": /cart/add answered 500` and add the first js_errors entry if there is one.
    Use the deploy sha from the message that asked you to run this; if
