@@ -68,8 +68,12 @@ For each product in `filter=behind`, for each of its listings:
 5. `mark_etsy_listing_synced` with `description` and/or `personalization`
    set to what you actually saved.
 
-Work in order, one listing at a time, and report a short line to this
-conversation every 10 listings: how many done, how many left, anything odd.
+Work in order, one listing at a time. Every 10 listings send a short
+progress line with `send_message` (how many done, how many left, anything
+odd) and KEEP GOING. Your final reply ends the run, so do not reply until
+Part 1 and Part 2 are both finished or you are blocked; a progress report
+that ends your turn stops the sync until someone pokes you again (that is
+what happened on 2026-09-16, ten listings at a time).
 If Etsy throws a page you don't recognise, screenshot it, stop that
 listing, say so, and move to the next.
 
