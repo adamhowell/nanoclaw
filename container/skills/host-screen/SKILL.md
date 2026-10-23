@@ -68,6 +68,12 @@ one screenshot: menus open, modals land (Etsy's survey popup), pages scroll,
 and a click aimed at a stale picture lands on the wrong thing.
 
 1. `focus`, then `screenshot`. Find the thing you want.
+   **Bare desktop wallpaper with no windows = the display is asleep, not
+   broken.** Wake it: `click` an empty spot of wallpaper (bottom right,
+   away from the Dock, e.g. x 1800 y 950), wait two seconds, `focus`,
+   `screenshot` again. Try that three times before telling Adam the screen
+   is stuck. (2026-10-23: one click brought Chrome straight back after
+   several runs had stopped at the wallpaper.)
 2. One action.
 3. `screenshot` again. Confirm it did what you meant. If it didn't, stop and
    work out why before the next click.
