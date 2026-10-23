@@ -97,8 +97,8 @@ Only after Part 1 is clean. For each product in `filter=unmapped`:
 6. Tags: `tags`, all of them, trimmed to Etsy's 13 if TAM lists more.
 7. Pictures, in the order given. Download them into
    `/workspace/extra/handoff_outbox/etsy/<handle>/01.jpg, 02.jpg, ...`
-   (that folder is `~/nanoclaw/data/handoff_outbox/etsy/<handle>/` on the
-   Mini). In Etsy's photo uploader, open the file dialog, press
+   (that folder is `/Users/burnie/nanoclaw-v2/data/handoff_outbox/etsy/<handle>/`
+   on the Mini). In Etsy's photo uploader, open the file dialog, press
    Cmd+Shift+G, type that Mini path, and pick the files. Delete every
    picture the copy inherited from the sibling first. Use the `alt`
    text TAM gives for each picture.
