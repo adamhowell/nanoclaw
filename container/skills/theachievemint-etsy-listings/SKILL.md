@@ -21,6 +21,16 @@ Two rules above everything else:
    any existing listing is behind. `list_etsy_listings filter=behind` must
    come back empty before `filter=unmapped` gets touched.
 
+## Make the call yourself
+
+Adam wants this done, not a list of questions (2026-10-25: "just do its best
+and let me know about it"). When something is ambiguous, pick the most
+reasonable option, do it, and say what you picked in the report. Never stop
+a run to ask. A new listing stays a DRAFT until Adam publishes it, so a
+wrong guess costs nothing; fixing a draft is quicker for him than answering
+a question. The only things that still stop you are the two rules above and
+"What not to do" below.
+
 ## Credentials
 
 ```bash
@@ -85,9 +95,14 @@ Only after Part 1 is clean. For each product in `filter=unmapped`:
 
 1. In Etsy's listing manager, find `sibling_listing_id` and use Etsy's
    **Copy** on it. The copy carries the category, shipping profile,
-   production partner, return policy and section. Record the new listing
-   id with `record_etsy_listing` (`state: "draft"`) as soon as the copy
-   exists, so a half-finished listing is never lost.
+   production partner, return policy and section. If there is no
+   `sibling_listing_id`, pick the closest existing listing yourself (same
+   kind of product: a token for a token, a fully custom coin for a fully
+   custom coin) and Copy that. A listing marked `sync_off` or written by
+   hand on Etsy is fine to Copy from; you replace everything TAM owns
+   anyway. Record the new listing id with `record_etsy_listing`
+   (`state: "draft"`) as soon as the copy exists, so a half-finished
+   listing is never lost.
 2. Title: TAM's `title`, then the same "| Custom Personalizable ... |"
    tail the sibling's Etsy title uses. Keep it under Etsy's 140 characters.
 3. Description: TAM's `description`, verbatim.
@@ -105,11 +120,13 @@ Only after Part 1 is clean. For each product in `filter=unmapped`:
    The pouch picture TAM hands you shows the soft pouch alone. Never
    upload a picture that shows the gift box or the message card, and
    never write "gift box" anywhere on Etsy; that is a site-only offer.
-8. Publish. Then `record_etsy_listing` again with `state: "active"` and the
+8. **Save as draft. Do not publish.** Adam looks it over and publishes it
+   himself. Then `record_etsy_listing` again with `state: "draft"` and the
    final `etsy_title`, then `mark_etsy_listing_synced` with both true.
 
-Report one line per listing created: title, listing id, anything you
-could not do (an upload that failed, a variant Etsy refused).
+Report one line per draft: title, listing id, which listing you copied
+from, any call you made on your own, and anything you could not do (an
+upload that failed, a variant Etsy refused).
 
 ## What not to do
 
