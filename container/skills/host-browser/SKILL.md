@@ -1,9 +1,17 @@
 ---
 name: host-browser
-description: Fetch real web pages through Adam's Mac Mini's persistent macOS Chromium. Use this for ANY URL that requires login (Etsy seller messages, Amazon Seller Central, Shopify, Stripe dashboard, Mercury) OR any site that aggressively bot-blocks (DataDome, Cloudflare, Imperva). Cookies for already-logged-in sites are persisted, so you read pages exactly as Adam would.
+description: Fetch real web pages through Adam's Mac Mini's persistent macOS Chromium. Use this for ANY URL that requires login (Amazon Seller Central, Shopify, Stripe dashboard, Mercury) EXCEPT Etsy: everything on etsy.com, reading included, goes through host-screen OR any site that aggressively bot-blocks (DataDome, Cloudflare, Imperva). Cookies for already-logged-in sites are persisted, so you read pages exactly as Adam would.
 ---
 
 # Host Browser — real macOS Chrome for authed/protected sites
+
+**Not for Etsy (Adam, 2026-11-07).** Anything on etsy.com, reading messages
+included, is done with the `host-screen` skill: look at the screen and click
+like a person, paced the way that skill says. Etsy is behind DataDome, and a
+scripted browser is what gets the session flagged. On 2026-11-07 an expedite
+check through this skill burned the 40-loads-an-hour budget in ten minutes
+and stalled. The hwm_app jobs that already read Etsy threads through this
+service are Adam's pipeline; leave them as they are.
 
 When you need to read content from a site that has bot protection or
 requires being logged in, do NOT use `agent-browser` (Playwright in
