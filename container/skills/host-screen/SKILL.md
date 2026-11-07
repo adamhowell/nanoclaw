@@ -1,6 +1,6 @@
 ---
 name: host-screen
-description: Change something on Etsy (or any bot-protected, logged-in site) by looking at the Mac Mini's screen and clicking, typing and pressing keys like a person. Use this for ANY edit on etsy.com — listing descriptions, personalization setup, order stages, anything with a Save button. Reads still go through host-browser; this is for acting.
+description: Change something on Etsy (or any bot-protected, logged-in site) by looking at the Mac Mini's screen and clicking, typing and pressing keys like a person. Use this for ANYTHING on etsy.com, reading included — messages, orders, listing descriptions, personalization setup, order stages, anything with a Save button (Adam, 2026-11-07). Other sites still read through host-browser.
 ---
 
 # Host Screen — see the Mini's display and act on it
@@ -124,8 +124,9 @@ nothing (trial two, 2026-09-02). Screenshot after each scroll.
 - **One at a time, first one to Adam.** The first listing of any new kind of
   edit is a trial: do it, send Adam the before and after screenshots, and
   wait for his go before doing the rest.
-- Reading still goes through host-browser `/fetch` and `/screenshot`. Use
-  this route to act, not to scrape.
+- On Etsy, reading goes through this skill too: open the conversation or
+  page and read the screenshot, paced like a person. Other sites still
+  read through host-browser `/fetch` and `/screenshot` (Adam, 2026-11-07).
 
 ## Failure modes
 
