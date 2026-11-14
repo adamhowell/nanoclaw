@@ -117,9 +117,16 @@ Only after Part 1 is clean. For each product in `filter=unmapped`:
    Cmd+Shift+G, type that Mini path, and pick the files. Delete every
    picture the copy inherited from the sibling first. Use the `alt`
    text TAM gives for each picture.
-   The pouch picture TAM hands you shows the soft pouch alone. Never
-   upload a picture that shows the gift box or the message card, and
-   never write "gift box" anywhere on Etsy; that is a site-only offer.
+   Never upload a picture that shows the gift bag (or the old gift box),
+   and never write "gift bag" or "gift box" anywhere on Etsy; that is a
+   site-only offer. The gift message card is fine: Etsy offers a free
+   gift message (Adam, 2026-11-12), so the Etsy "What arrives" picture
+   shows the pouch and the card.
+   Standard photo sets (2026-11-12): every listing now has one in
+   `/workspace/extra/handoff_outbox/etsy-standard/<handle>/` (on the Mini:
+   `/Users/burnie/nanoclaw-v2/data/handoff_outbox/etsy-standard/<handle>/`),
+   already in upload order and already the Etsy version. Use that folder
+   when it exists instead of downloading the pictures from TAM.
 8. **Save as draft. Do not publish.** Adam looks it over and publishes it
    himself. Then `record_etsy_listing` again with `state: "draft"` and the
    final `etsy_title`, then `mark_etsy_listing_synced` with both true.
