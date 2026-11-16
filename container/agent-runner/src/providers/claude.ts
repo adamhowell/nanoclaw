@@ -40,6 +40,15 @@ const SDK_DISALLOWED_TOOLS = [
   'ExitWorktree',
   'DesignSync',
   'ReportFindings',
+  // FORK: never called in 175 Burnie transcripts (2026-11-16), and their
+  // schemas ride along on every turn. Measured with /context in the
+  // container: Workflow 7.7k tokens, NotebookEdit 0.6k, PushNotification
+  // 0.5k, RemoteTrigger 0.4k. Every session started at 63k tokens before
+  // the first message; this takes about 9k off.
+  'Workflow',
+  'NotebookEdit',
+  'PushNotification',
+  'RemoteTrigger',
 ];
 
 // Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived
@@ -65,7 +74,6 @@ const TOOL_ALLOWLIST = [
   'TodoWrite',
   'ToolSearch',
   'Skill',
-  'NotebookEdit',
 ];
 
 // MCP server names are sanitized by the SDK when forming tool prefixes:
