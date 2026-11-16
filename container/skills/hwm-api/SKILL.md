@@ -115,7 +115,8 @@ inclusive. `{"days":7}` works in place of from/to (no `before` block).
 
 - Sources are `etsy`, `achievemint` (the website, there is no separate
   "website" source) and `amazon`.
-- Amazon is discontinued and Adam never wants it mentioned. The plain
+- Amazon is discontinued and Adam never wants it mentioned, not even to say
+  it was left out. Leave it out silently. The plain
   `orders` and `revenue` totals still include old Amazon orders, so build
   every total and every comparison from the etsy and achievemint lines of
   `by_source` and `revenue_by_source`.
