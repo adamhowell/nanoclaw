@@ -15,6 +15,16 @@ mouse and keyboard that work on it.
 
 Nothing here knows what a selector is. Do not look for one.
 
+## Not for numbers
+
+Sales, revenue, order counts, ad spend and traffic are never read off Etsy's
+screen. hwm_app already has every Etsy and site order and answers in a
+second; Shop Manager's date picker takes minutes and leaves out the website
+(2026-11-16: an eleven-minute, Etsy-only answer to a question one call
+covers). Use the `hwm-api` skill, "Sales and orders". Come here for a number
+only when Adam asks for Etsy's own figure by name (Etsy's visits, Etsy's
+conversion rate), and say that is what it is.
+
 ## Endpoint
 
 Same service, same auth as host-browser:

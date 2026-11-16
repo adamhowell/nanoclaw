@@ -1,6 +1,6 @@
 ---
 name: hwm-api
-description: Access Adam's email, todos, calendar, orders, notes, contacts, weather, briefings, and voice calls via the HWM API. Use when the user asks about any of these.
+description: Access Adam's email, todos, calendar, orders, notes, contacts, weather, briefings, and voice calls via the HWM API, plus every number about the business (sales and revenue for any dates, by shop, compared with the span before; the books; ads; site traffic). Use when the user asks about any of these. Sales, revenue and trend questions start here, never on Etsy's screen.
 ---
 
 # HWM API — Personal Data Access
@@ -96,13 +96,72 @@ Range: `today`, `tomorrow`, `week` (default: all upcoming)
 
 ---
 
-## Orders (Etsy, Amazon, TheAchieveMint)
+## Sales and orders (Etsy and theachievemint.com)
 
-### Recent orders
+Any sales question ("are we up", "last 90 days against the 90 before", "how
+is the site doing") is ONE call. Do not guess other URLs, and do not open
+Etsy Shop Manager for numbers: hwm_app has every Etsy and site order off the
+sale emails, back to the start.
+
 ```bash
-curl -s -H "Authorization: Bearer $HWM_API_TOKEN" "$HWM_API_URL/orders?days=7&limit=25"
+curl -s -X POST -H "Authorization: Bearer $HWM_API_TOKEN" -H "Content-Type: application/json" \
+  "$HWM_API_URL/tools/orders" -d '{"from":"2026-08-18","to":"2026-11-16"}'
 ```
-Returns total count, total revenue, and orders grouped by source.
+
+Returns `orders`, `revenue`, `by_source` (order counts) and
+`revenue_by_source` (dollars) for those dates, and a `before` block with the
+same four for the equal span just before. Dates are whole Eastern days,
+inclusive. `{"days":7}` works in place of from/to (no `before` block).
+
+- Sources are `etsy`, `achievemint` (the website, there is no separate
+  "website" source) and `amazon`.
+- Amazon is discontinued and Adam never wants it mentioned. The plain
+  `orders` and `revenue` totals still include old Amazon orders, so build
+  every total and every comparison from the etsy and achievemint lines of
+  `by_source` and `revenue_by_source`.
+- For a trend, make two or three calls with different windows (last 30,
+  31 to 90, 91 to 180) and compare dollars per day.
+
+Individual orders: `POST $HWM_API_URL/tools/search_orders`, or the older
+`GET $HWM_API_URL/orders?days=7&limit=25`.
+
+---
+
+## Every other number: the tools list
+
+hwm_app and theachievemint.com each publish their read tools at one address.
+These are the same tools Adam's Claude uses, so the list is always current
+even when this file is not. **Before telling Adam something can't be looked
+up, list the tools.** Two 404s on guessed URLs means stop guessing and list.
+
+```bash
+# What exists (name, what it does, arguments)
+curl -s -H "Authorization: Bearer $HWM_API_TOKEN" "$HWM_API_URL/tools" \
+  | python3 -c "import json,sys; [print(t['name'], '|', t['about'], '|', ', '.join(t.get('args',{}))) for t in json.load(sys.stdin)['tools']]"
+curl -s -H "Authorization: Bearer $TAM_API_TOKEN" "https://theachievemint.com/api/v1/tools" \
+  | python3 -c "import json,sys; [print(t['name'], '|', t['about'], '|', ', '.join(t.get('args',{}))) for t in json.load(sys.stdin)['tools']]"
+
+# Run one: POST the arguments as JSON
+curl -s -X POST -H "Authorization: Bearer $HWM_API_TOKEN" -H "Content-Type: application/json" \
+  "$HWM_API_URL/tools/profit_and_loss" -d '{}'
+curl -s -X POST -H "Authorization: Bearer $TAM_API_TOKEN" -H "Content-Type: application/json" \
+  "https://theachievemint.com/api/v1/tools/revenue" -d '{"since":"2026-08-18","until":"2026-11-16"}'
+```
+
+The ones asked for most:
+
+| question | where | tool |
+|---|---|---|
+| sales for any dates, by shop, against the span before | hwm_app | `orders` |
+| site orders and revenue as the store itself counts them (paid only) | TAM | `revenue` |
+| orders to ship, today's revenue, the engraving queue | TAM | `shop_dashboard` |
+| profit, fees, shipping, taxes | hwm_app | `profit_and_loss`, `books_overview`, `tax_estimate` |
+| ad spend and what it earned | hwm_app | `ads_performance` |
+| site visitors and where they came from | hwm_app `tam_traffic`, TAM `site_traffic` |
+| one customer, one order, one engraving job | TAM | `search_orders`, `read_order`, `read_customer`, `read_engraving_job` |
+
+Only read tools are offered there. Anything that changes or sends goes
+through the endpoints in the rest of this file and the task API.
 
 ---
 
@@ -249,4 +308,4 @@ curl -s -H "Authorization: Bearer $HWM_API_TOKEN" "$HWM_API_URL/calls"
 - Adam is in **Eastern Time** (America/New_York)
 - Email domains: hwm.llc (primary: adam@hwm.llc), theachievemint.com
 - Convert natural language times to ISO 8601 for snooze/scheduling
-- Order sources: Etsy, Amazon, TheAchieveMint
+- Order sources: etsy, achievemint (the website). Amazon is discontinued; leave it out of every total

@@ -71,6 +71,9 @@ Reaching for a screenshot to "see what the page looks like" on an
 internal app is a debugging anti-pattern borrowed from real
 bot-protected sites. For our own Rails apps, instead:
 
+0. List the read tools (`GET $HWM_API_URL/tools`, and the same path on
+   theachievemint.com). See the `hwm-api` skill. Most questions about
+   sales, orders, customers, the books and traffic are one tool call.
 1. Read the API response body — it'll have the answer.
 2. Grep the source at `/workspace/group/hwm_app/` for the route /
    controller / model.
