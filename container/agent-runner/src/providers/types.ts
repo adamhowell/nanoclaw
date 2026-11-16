@@ -48,6 +48,13 @@ export interface AgentProvider {
    * before it ever replies. Providers without an on-disk transcript omit this.
    */
   maybeRotateContinuation?(continuation: string, cwd: string): string | null;
+
+  /**
+   * FORK: how many tokens of context the conversation's last turn carried, or
+   * null when that can't be read. Lets the runner compact a heavy conversation
+   * while it is idle (idle-compact.ts) instead of mid-question.
+   */
+  contextTokens?(continuation: string): number | null;
 }
 
 /** One prompt/result round-trip, as reported to `onExchangeComplete`. */

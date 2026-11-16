@@ -318,6 +318,41 @@ function transcriptStartMs(transcriptPath: string): number | null {
   }
 }
 
+/**
+ * FORK: context size of the last turn in a transcript, read from the tail so
+ * a multi-megabyte .jsonl costs one small read. Null when no turn has usage.
+ */
+export function lastContextTokens(transcriptPath: string): number | null {
+  try {
+    const size = fs.statSync(transcriptPath).size;
+    const want = Math.min(size, 2 * 1024 * 1024);
+    const buf = Buffer.alloc(want);
+    const fd = fs.openSync(transcriptPath, 'r');
+    try {
+      fs.readSync(fd, buf, 0, want, size - want);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const lines = buf.toString('utf-8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('"usage"')) continue;
+      try {
+        const row = JSON.parse(lines[i]);
+        // Subagent turns share the file but not the context.
+        if (row?.isSidechain) continue;
+        const u = row?.message?.usage;
+        if (!u) continue;
+        return (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+      } catch {
+        /* a line cut by the tail read */
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Provider ──
 
 /**
@@ -362,6 +397,14 @@ export class ClaudeProvider implements AgentProvider {
   isSessionInvalid(err: unknown): boolean {
     const msg = err instanceof Error ? err.message : String(err);
     return STALE_SESSION_RE.test(msg);
+  }
+
+  // FORK: see idle-compact.ts. The last usage entry in the transcript is the
+  // context the most recent turn was sent with.
+  contextTokens(continuation: string): number | null {
+    const transcriptPath = findTranscriptPath(continuation);
+    if (!transcriptPath) return null;
+    return lastContextTokens(transcriptPath);
   }
 
   maybeRotateContinuation(continuation: string): string | null {

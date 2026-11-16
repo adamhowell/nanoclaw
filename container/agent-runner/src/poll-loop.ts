@@ -27,6 +27,7 @@ import {
   type RoutingContext,
 } from './formatter.js';
 import { isUploadTraceCommand, uploadTrace } from './upload-trace.js';
+import { compactIfHeavy } from './idle-compact.js';
 import type { AgentProvider, AgentQuery, ProviderEvent, ProviderExchange } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
@@ -370,6 +371,15 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // re-open, letting the host re-spawn on the next due message. Without this
     // the container would idle until the host's 30-min absolute-ceiling kill.
     if (endedIdle) {
+      // FORK: a heavy conversation is compacted now, while nobody is waiting,
+      // rather than in the middle of the next question (idle-compact.ts).
+      if (!routing.taskRun && continuation) {
+        const compacted = await compactIfHeavy(config.provider, continuation, config);
+        if (compacted !== continuation) {
+          continuation = compacted;
+          setContinuation(config.providerName, continuation);
+        }
+      }
       log('No follow-up within warm window — standing down (clean exit)');
       return;
     }
