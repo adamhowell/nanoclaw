@@ -127,6 +127,7 @@ Only after Part 1 is clean. For each product in `filter=unmapped`:
    `/Users/burnie/nanoclaw-v2/data/handoff_outbox/etsy-standard/<handle>/`),
    already in upload order and already the Etsy version. Use that folder
    when it exists instead of downloading the pictures from TAM.
+   Follow "Pictures: right folder, right coin" below for every upload.
 8. **Save as draft. Do not publish.** Adam looks it over and publishes it
    himself. Then `record_etsy_listing` again with `state: "draft"` and the
    final `etsy_title`, then `mark_etsy_listing_synced` with both true.
@@ -134,6 +135,37 @@ Only after Part 1 is clean. For each product in `filter=unmapped`:
 Report one line per draft: title, listing id, which listing you copied
 from, any call you made on your own, and anything you could not do (an
 upload that failed, a variant Etsy refused).
+
+## Pictures: right folder, right coin
+
+Every picture upload on Etsy follows this, whether it is a new listing, a
+sync, or a photo replacement. On 2026-11-16 the Any Year Clockwork listing
+went live for a day with Starry Night's front and back photos on it: every
+folder holds the same file names (01-front.jpg, 02-back.jpg, ...), the file
+dialog reopened in the previous listing's folder, and the listing was
+checked by count and by the success toast, never by looking at the photos.
+
+1. **Set the folder every time the file dialog opens.** Never trust where
+   it opened. Press Cmd+Shift+G, clear the field until it is visibly
+   empty, type the full Mini path for THIS listing's handle, press Return.
+2. **Read the folder name before you pick a file.** Screenshot the dialog
+   and read the folder name in its title or path bar. It must be this
+   listing's handle, character for character ("...-token" is not
+   "...-coin", "one-month" is not "one-week"). If it is not, fix it. Do
+   not pick a file from a dialog whose folder you have not read.
+3. **Look at every photo after it lands.** After each upload, screenshot
+   the grid and check what the new tile actually shows against the
+   listing's title: the design (gears, hummingbird, mandala) and the words
+   on the coin (the milestone, the year on the rim). A tile appearing in
+   the right slot proves nothing.
+4. **Compare once more before Publish or Save.** With the whole set in
+   place, go through the tiles in order and name what each one shows. The
+   front and back must be this listing's coin. If any photo shows another
+   coin, delete it and upload the right file from the right folder, then
+   check again. Never publish a listing with a photo you have not looked at.
+5. **Write what you saw in the report or the done list row**, e.g.
+   "front: Clockwork gears, 8 YEARS rim; back: Clockwork back". "9 photos
+   in order" or "verified via toast" is not a check.
 
 ## What not to do
 
